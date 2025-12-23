@@ -378,6 +378,7 @@ class Application:
             toggle_pause_hotkey=self.controller.config.ui.hotkeys.toggle_pause,
             emergency_stop_hotkey=self.controller.config.ui.hotkeys.emergency_stop,
         )
+        self.app.aboutToQuit.connect(self.window.shutdown_hotkeys)
         self._calibration_started_controller = False
         self._calibration_prev_paused = False
         
@@ -509,6 +510,7 @@ class Application:
 
     def _on_exit(self):
         """退出"""
+        self.window.shutdown_hotkeys()
         self.controller.stop()
         self.app.quit()
     
