@@ -6,9 +6,12 @@ M2: 人脸追踪模块
 from dataclasses import dataclass
 from typing import Optional, List
 from pathlib import Path
+import sys
 import time
 import urllib.request
 import numpy as np
+import shutil
+import tempfile
 
 import cv2
 import mediapipe as mp
@@ -134,6 +137,7 @@ class FaceTracker:
 
         model_file = self._resolve_model_path(model_path)
         self._ensure_model_file(model_file)
+        model_file = self._ensure_ascii_model_path(model_file)
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(model_file)),
@@ -148,6 +152,17 @@ class FaceTracker:
     def _resolve_model_path(self, model_path: Optional[str]) -> Path:
         if model_path:
             return Path(model_path).expanduser()
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates = []
+            if hasattr(sys, "_MEIPASS"):
+                candidates.append(Path(sys._MEIPASS) / "assets" / "models" / "face_landmarker.task")
+            candidates.append(exe_dir / "assets" / "models" / "face_landmarker.task")
+            candidates.append(exe_dir / "_internal" / "assets" / "models" / "face_landmarker.task")
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            return candidates[0] if candidates else exe_dir / "assets" / "models" / "face_landmarker.task"
         repo_root = Path(__file__).resolve().parents[2]
         return repo_root / "assets" / "models" / "face_landmarker.task"
 
@@ -162,6 +177,21 @@ class FaceTracker:
                 f"Failed to download face landmarker model to {model_file}. "
                 f"Please download it manually from {MODEL_URL}."
             ) from exc
+
+    def _ensure_ascii_model_path(self, model_file: Path) -> Path:
+        try:
+            str(model_file).encode("ascii")
+            return model_file
+        except UnicodeEncodeError:
+            pass
+        temp_root = Path(tempfile.gettempdir()) / "EyeScroll" / "models"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_root / model_file.name
+        if model_file.exists():
+            shutil.copy2(model_file, temp_path)
+        else:
+            self._ensure_model_file(temp_path)
+        return temp_path
 
     def process(self, frame: np.ndarray) -> Optional[FaceLandmarks]:
         """
