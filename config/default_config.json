@@ -1,0 +1,58 @@
+{
+  "camera": {
+    "index": 0,
+    "width": 640,
+    "height": 480,
+    "target_fps": 30
+  },
+  "calibration": {
+    "r_top": 0.25,
+    "r_mid": 0.50,
+    "r_bottom": 0.75,
+    "method": "linear",
+    "mode": "head",
+    "head_pitch_min": -0.12,
+    "head_pitch_max": 0.12,
+    "head_pitch_center": 0.2,
+    "timestamp": null
+  },
+  "fusion": {
+    "w_gaze": 0.8,
+    "w_pitch": 0.2
+  },
+  "filter": {
+    "ema_alpha": 0.75,
+    "confidence_min": 0.4,
+    "lost_face_timeout_ms": 500
+  },
+  "thresholds": {
+    "th_on": 0.45,
+    "th_off": 0.35,
+    "dwell_on_ms": 120,
+    "dwell_off_ms": 80
+  },
+  "scroll": {
+    "v_max": 3.0,
+    "gamma": 1.8,
+    "a_up": 8.0,
+    "a_down": 16.0,
+    "tick_hz": 90
+  },
+  "blink": {
+    "long_blink_ms": 900,
+    "cooldown_ms": 2000
+  },
+  "ui": {
+    "always_on_top": true,
+    "show_overlay": false,
+    "hotkeys": {
+      "toggle_pause": "Ctrl+Shift+Space",
+      "emergency_stop": "Escape"
+    }
+  },
+  "injection": {
+    "target": "cursor",
+    "process_name": null,
+    "smooth_scroll": true
+  }
+}

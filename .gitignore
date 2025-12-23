@@ -1,0 +1,26 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.log
+
+# Virtual environments
+.venv/
+venv/
+
+# PyInstaller
+build/
+dist/
+
+# User config
+config/config.json
+架构文档.md
+人脸控制网页漫画滚动设计文档.md
+AGENTS.md
+
+# Model assets (optional if too large)
+# assets/models/*.task
+
+# OS
+.DS_Store
+Thumbs.db
