@@ -4,6 +4,7 @@ M9: 主窗口
 """
 
 import sys
+import logging
 from typing import Optional
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 from PySide6.QtCore import Qt, QTimer, Signal, Slot
@@ -12,6 +13,10 @@ from PySide6.QtGui import QCloseEvent, QShortcut, QKeySequence
 from .floating_panel import FloatingPanel
 from .tray_icon import TrayIcon
 from .calibration_wizard import CalibrationWizard
+try:
+    import keyboard
+except Exception:
+    keyboard = None
 
 
 class MainWindow(QMainWindow):
@@ -36,6 +41,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         
         self._always_on_top = always_on_top
+        self._logger = logging.getLogger("ui.hotkeys")
         
         # 创建 UI 组件
         self.panel = FloatingPanel(always_on_top)
@@ -49,6 +55,9 @@ class MainWindow(QMainWindow):
         self._toggle_pause_hotkey = toggle_pause_hotkey or "Ctrl+Shift+Space"
         self._emergency_stop_hotkey = emergency_stop_hotkey or "Escape"
         self._setup_shortcuts()
+        self._global_hotkeys = []
+        self._global_hotkeys_enabled = keyboard is not None
+        self._setup_global_hotkeys()
         
         # 隐藏主窗口，只显示悬浮面板
         self.hide()
@@ -72,24 +81,69 @@ class MainWindow(QMainWindow):
         self.tray.exit_clicked.connect(self._on_exit)
     
     def _setup_shortcuts(self):
-        """设置全局快捷键"""
-        # 暂停/恢复快捷键
+        """Setup shortcuts."""
+        # Pause/resume shortcut (in-app)
         self._pause_shortcut = QShortcut(QKeySequence(self._toggle_pause_hotkey), self.panel)
         self._pause_shortcut.activated.connect(self.pause_requested.emit)
-        
-        # 紧急停止
+
+        # Emergency stop shortcut (in-app)
         self._stop_shortcut = QShortcut(QKeySequence(self._emergency_stop_hotkey), self.panel)
         self._stop_shortcut.activated.connect(self._emergency_stop)
 
+    def _invoke_in_ui(self, func):
+        QTimer.singleShot(0, func)
+
+    def _setup_global_hotkeys(self):
+        if not self._global_hotkeys_enabled:
+            return
+        self._register_global_hotkeys()
+
+    def _register_global_hotkeys(self):
+        self._unregister_global_hotkeys()
+        if not self._global_hotkeys_enabled:
+            return
+        try:
+            self._global_hotkeys.append(
+                keyboard.add_hotkey(
+                    self._toggle_pause_hotkey,
+                    lambda: self._invoke_in_ui(self.pause_requested.emit),
+                )
+            )
+            self._global_hotkeys.append(
+                keyboard.add_hotkey(
+                    self._emergency_stop_hotkey,
+                    lambda: self._invoke_in_ui(self._emergency_stop),
+                )
+            )
+        except Exception as exc:
+            self._logger.warning("Failed to register global hotkeys: %s", exc)
+            self._global_hotkeys_enabled = False
+            self._unregister_global_hotkeys()
+
+    def _unregister_global_hotkeys(self):
+        if keyboard is None:
+            return
+        for hotkey in self._global_hotkeys:
+            try:
+                keyboard.remove_hotkey(hotkey)
+            except Exception:
+                pass
+        self._global_hotkeys.clear()
+
     def update_hotkeys(self, toggle_pause: str, emergency_stop: str = "Escape"):
-        """更新快捷键绑定"""
+        """Update hotkey bindings."""
         self._toggle_pause_hotkey = toggle_pause or self._toggle_pause_hotkey
         self._emergency_stop_hotkey = emergency_stop or self._emergency_stop_hotkey
         if hasattr(self, "_pause_shortcut"):
             self._pause_shortcut.setKey(QKeySequence(self._toggle_pause_hotkey))
         if hasattr(self, "_stop_shortcut"):
             self._stop_shortcut.setKey(QKeySequence(self._emergency_stop_hotkey))
-    
+        self._register_global_hotkeys()
+
+    def shutdown_hotkeys(self):
+        """Cleanup global hotkeys on exit."""
+        self._unregister_global_hotkeys()
+
     def _show_panel(self):
         """显示悬浮面板"""
         self.panel.show()
