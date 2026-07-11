@@ -19,6 +19,7 @@ hiddenimports = [
     'sounddevice',
 ]
 binaries += collect_dynamic_libs('mediapipe')
+binaries += collect_dynamic_libs('vosk')
 
 
 import os
