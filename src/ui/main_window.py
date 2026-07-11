@@ -103,13 +103,13 @@ class MainWindow(QMainWindow):
 
     def _emergency_stop(self) -> None:
         self.stop_requested.emit()
-        self.tray.show_message("紧急停止", "手势翻页已停止")
+        self.tray.show_message("紧急停止", "HeadScroll 已停止")
 
     def _on_exit(self) -> None:
         reply = QMessageBox.question(
             self.panel,
             "确认退出",
-            "确定要退出手势翻页控制吗？",
+            "确定要退出 HeadScroll 吗？",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -132,14 +132,8 @@ class MainWindow(QMainWindow):
     def set_mode(self, mode: str) -> None:
         self.panel.set_mode(mode)
 
-    def update_hand_status(self, *args) -> None:
-        self.panel.update_hand_status(*args)
-
     def update_palm(self, palm_x: float | None) -> None:
         self.panel.update_palm(palm_x)
-
-    def update_gesture_state(self, state: str) -> None:
-        self.panel.update_gesture_state(state)
 
     def update_last_action(self, action: str) -> None:
         self.panel.update_last_action(action)
@@ -155,6 +149,9 @@ class MainWindow(QMainWindow):
 
     def update_control_state(self, state: str) -> None:
         self.panel.update_control_state(state)
+
+    def update_transcript(self, transcript: str) -> None:
+        self.panel.update_transcript(transcript)
 
     def update_calibration_value(self, position: float, raw_value: float) -> None:
         if self.calibration_wizard.isVisible():

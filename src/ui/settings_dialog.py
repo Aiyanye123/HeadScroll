@@ -1,4 +1,4 @@
-"""Settings for hand page turning and head scrolling."""
+"""Settings for voice page turning and head scrolling."""
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -6,13 +6,13 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFormLayout,
     QFileDialog,
+    QFormLayout,
     QHBoxLayout,
     QKeySequenceEdit,
     QLineEdit,
-    QPushButton,
     QMessageBox,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
@@ -23,70 +23,51 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self._config = config
         self.setWindowTitle("控制设置")
-        self.setMinimumSize(460, 620)
-
+        self.setMinimumSize(500, 580)
         layout = QVBoxLayout(self)
         form = QFormLayout()
+
         self.mode = QComboBox()
-        self.mode.addItem("手势左右翻页", "hand")
+        self.mode.addItem("语音左右翻页", "voice")
         self.mode.addItem("抬头/低头上下滚动", "head")
         form.addRow("控制模式:", self.mode)
 
         model_row = QHBoxLayout()
         self.model_path = QLineEdit()
-        self.model_path.setPlaceholderText("留空使用内置官方模型")
-        model_button = QPushButton("选择")
-        model_button.clicked.connect(self._pick_model)
+        self.model_path.setPlaceholderText("留空使用内置中文模型")
+        pick = QPushButton("选择")
+        pick.clicked.connect(self._pick_model)
         model_row.addWidget(self.model_path)
-        model_row.addWidget(model_button)
-        form.addRow("自定义手势模型:", model_row)
+        model_row.addWidget(pick)
+        form.addRow("语音模型目录:", model_row)
 
-        self.activation_gesture = QLineEdit()
-        form.addRow("轨迹启动类别:", self.activation_gesture)
+        self.device = QComboBox()
+        self.device.addItem("系统默认麦克风", None)
+        try:
+            import sounddevice as sd
 
-        self.mirror = QCheckBox("按镜像画面解释左右方向")
-        form.addRow("摄像头:", self.mirror)
-
-        self.confidence = QDoubleSpinBox()
-        self.confidence.setRange(0.5, 0.95)
-        self.confidence.setSingleStep(0.05)
-        form.addRow("最低识别置信度:", self.confidence)
-
-        self.distance = QDoubleSpinBox()
-        self.distance.setRange(0.08, 0.35)
-        self.distance.setSingleStep(0.01)
-        form.addRow("最小横向位移:", self.distance)
-
-        self.arm_duration = QSpinBox()
-        self.arm_duration.setRange(50, 1000)
-        self.arm_duration.setSuffix(" ms")
-        form.addRow("手掌稳定时间:", self.arm_duration)
-
-        self.vertical_drift = QDoubleSpinBox()
-        self.vertical_drift.setRange(0.03, 0.30)
-        self.vertical_drift.setSingleStep(0.01)
-        form.addRow("最大垂直漂移:", self.vertical_drift)
-
-        self.min_speed = QDoubleSpinBox()
-        self.min_speed.setRange(0.1, 2.0)
-        self.min_speed.setSingleStep(0.05)
-        form.addRow("最小挥动速度:", self.min_speed)
-
-        self.consistency = QDoubleSpinBox()
-        self.consistency.setRange(0.5, 1.0)
-        self.consistency.setSingleStep(0.05)
-        form.addRow("方向一致性:", self.consistency)
-
+            for index, info in enumerate(sd.query_devices()):
+                if info["max_input_channels"] > 0:
+                    self.device.addItem(f"{index}: {info['name']}", index)
+        except Exception:
+            pass
+        form.addRow("麦克风:", self.device)
+        self.require_wake = QCheckBox("必须先说唤醒词")
+        form.addRow("防误触:", self.require_wake)
+        self.wake_words = QLineEdit()
+        form.addRow("唤醒词:", self.wake_words)
+        self.previous_phrases = QLineEdit()
+        form.addRow("上一页指令:", self.previous_phrases)
+        self.next_phrases = QLineEdit()
+        form.addRow("下一页指令:", self.next_phrases)
+        self.pause_phrases = QLineEdit()
+        form.addRow("暂停指令:", self.pause_phrases)
+        self.resume_phrases = QLineEdit()
+        form.addRow("恢复指令:", self.resume_phrases)
         self.cooldown = QSpinBox()
-        self.cooldown.setRange(200, 2000)
+        self.cooldown.setRange(200, 3000)
         self.cooldown.setSuffix(" ms")
         form.addRow("翻页冷却时间:", self.cooldown)
-
-        self.fist_hold = QSpinBox()
-        self.fist_hold.setRange(300, 2000)
-        self.fist_hold.setSuffix(" ms")
-        form.addRow("握拳暂停时间:", self.fist_hold)
-
         self.previous_key = self._key_combo()
         self.next_key = self._key_combo()
         form.addRow("上一页按键:", self.previous_key)
@@ -96,17 +77,14 @@ class SettingsDialog(QDialog):
         self.scroll_speed.setRange(0.5, 10.0)
         self.scroll_speed.setSingleStep(0.5)
         form.addRow("头部最大滚动速度:", self.scroll_speed)
-
         self.head_trigger = QDoubleSpinBox()
         self.head_trigger.setRange(0.1, 0.9)
         self.head_trigger.setSingleStep(0.05)
         form.addRow("头部触发阈值:", self.head_trigger)
-
         self.head_release = QDoubleSpinBox()
         self.head_release.setRange(0.05, 0.85)
         self.head_release.setSingleStep(0.05)
         form.addRow("头部释放阈值:", self.head_release)
-
         self.pause_hotkey = QKeySequenceEdit()
         form.addRow("暂停/恢复快捷键:", self.pause_hotkey)
         self.stop_hotkey = QKeySequenceEdit()
@@ -124,76 +102,79 @@ class SettingsDialog(QDialog):
     @staticmethod
     def _key_combo() -> QComboBox:
         combo = QComboBox()
-        for label, value in (
-            ("← Left", "Left"),
-            ("→ Right", "Right"),
-            ("Page Up", "PageUp"),
-            ("Page Down", "PageDown"),
-        ):
+        for label, value in (("← Left", "Left"), ("→ Right", "Right"),
+                             ("Page Up", "PageUp"), ("Page Down", "PageDown")):
             combo.addItem(label, value)
         return combo
 
     @staticmethod
     def _select(combo: QComboBox, value: str) -> None:
-        index = combo.findData(value)
-        combo.setCurrentIndex(max(0, index))
+        combo.setCurrentIndex(max(0, combo.findData(value)))
+
+    @staticmethod
+    def _phrases(text: str) -> list[str]:
+        return [item.strip() for item in text.replace("，", ",").split(",") if item.strip()]
 
     def _pick_model(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择 MediaPipe 手势模型", "", "MediaPipe Task (*.task)"
-        )
+        path = QFileDialog.getExistingDirectory(self, "选择 Vosk 模型目录")
         if path:
             self.model_path.setText(path)
 
     def _load(self) -> None:
-        cfg = self._config.gesture
+        voice = self._config.voice
         self._select(self.mode, self._config.mode)
-        self.model_path.setText(cfg.model_path or "")
-        self.activation_gesture.setText(cfg.activation_gesture)
-        self.mirror.setChecked(cfg.mirror)
-        self.confidence.setValue(cfg.min_confidence)
-        self.distance.setValue(cfg.min_swipe_distance)
-        self.arm_duration.setValue(int(cfg.arm_duration_ms))
-        self.vertical_drift.setValue(cfg.max_vertical_drift)
-        self.min_speed.setValue(cfg.min_swipe_speed)
-        self.consistency.setValue(cfg.direction_consistency)
-        self.cooldown.setValue(int(cfg.cooldown_ms))
-        self.fist_hold.setValue(int(cfg.fist_hold_ms))
-        self._select(self.previous_key, cfg.previous_key)
-        self._select(self.next_key, cfg.next_key)
-        self.pause_hotkey.setKeySequence(self._config.ui.hotkeys.toggle_pause)
-        self.stop_hotkey.setKeySequence(self._config.ui.hotkeys.emergency_stop)
+        self.model_path.setText(voice.model_path or "")
+        self._select(self.device, voice.device)
+        self.require_wake.setChecked(voice.require_wake_word)
+        for widget, values in (
+            (self.wake_words, voice.wake_words),
+            (self.previous_phrases, voice.previous_phrases),
+            (self.next_phrases, voice.next_phrases),
+            (self.pause_phrases, voice.pause_phrases),
+            (self.resume_phrases, voice.resume_phrases),
+        ):
+            widget.setText("，".join(values))
+        self.cooldown.setValue(int(voice.cooldown_ms))
+        self._select(self.previous_key, voice.previous_key)
+        self._select(self.next_key, voice.next_key)
         self.scroll_speed.setValue(self._config.scroll.v_max)
         self.head_trigger.setValue(self._config.thresholds.th_on)
         self.head_release.setValue(self._config.thresholds.th_off)
+        self.pause_hotkey.setKeySequence(self._config.ui.hotkeys.toggle_pause)
+        self.stop_hotkey.setKeySequence(self._config.ui.hotkeys.emergency_stop)
 
     def _save(self) -> None:
+        groups = [self._phrases(widget.text()) for widget in (
+            self.previous_phrases, self.next_phrases, self.pause_phrases, self.resume_phrases
+        )]
+        if any(not group for group in groups):
+            QMessageBox.warning(self, "设置无效", "四组语音指令都不能为空")
+            return
+        if self.require_wake.isChecked() and not self._phrases(self.wake_words.text()):
+            QMessageBox.warning(self, "设置无效", "启用唤醒词后必须填写唤醒词")
+            return
         if self.previous_key.currentData() == self.next_key.currentData():
             QMessageBox.warning(self, "设置无效", "上一页和下一页按键不能相同")
             return
         if self.head_release.value() >= self.head_trigger.value():
             QMessageBox.warning(self, "设置无效", "头部释放阈值必须小于触发阈值")
             return
-        cfg = self._config.gesture
+        voice = self._config.voice
         self._config.config.mode = self.mode.currentData()
-        cfg.model_path = self.model_path.text().strip() or None
-        cfg.activation_gesture = self.activation_gesture.text().strip()
-        cfg.mirror = self.mirror.isChecked()
-        cfg.min_confidence = self.confidence.value()
-        cfg.min_swipe_distance = self.distance.value()
-        cfg.arm_duration_ms = self.arm_duration.value()
-        cfg.max_vertical_drift = self.vertical_drift.value()
-        cfg.min_swipe_speed = self.min_speed.value()
-        cfg.direction_consistency = self.consistency.value()
-        cfg.cooldown_ms = self.cooldown.value()
-        cfg.fist_hold_ms = self.fist_hold.value()
-        cfg.previous_key = self.previous_key.currentData()
-        cfg.next_key = self.next_key.currentData()
-        self._config.ui.hotkeys.toggle_pause = self.pause_hotkey.keySequence().toString()
-        self._config.ui.hotkeys.emergency_stop = self.stop_hotkey.keySequence().toString()
+        voice.model_path = self.model_path.text().strip() or None
+        voice.device = self.device.currentData()
+        voice.require_wake_word = self.require_wake.isChecked()
+        voice.wake_words = self._phrases(self.wake_words.text())
+        (voice.previous_phrases, voice.next_phrases,
+         voice.pause_phrases, voice.resume_phrases) = groups
+        voice.cooldown_ms = self.cooldown.value()
+        voice.previous_key = self.previous_key.currentData()
+        voice.next_key = self.next_key.currentData()
         self._config.scroll.v_max = self.scroll_speed.value()
         self._config.thresholds.th_on = self.head_trigger.value()
         self._config.thresholds.th_off = self.head_release.value()
+        self._config.ui.hotkeys.toggle_pause = self.pause_hotkey.keySequence().toString()
+        self._config.ui.hotkeys.emergency_stop = self.stop_hotkey.keySequence().toString()
         if not self._config.save():
             QMessageBox.critical(self, "保存失败", "无法写入用户配置文件")
             return

@@ -3,8 +3,8 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 
 datas = [
     ('../config', 'config'),
-    ('../assets/models/gesture_recognizer.task', 'assets/models'),
     ('../assets/models/face_landmarker.task', 'assets/models'),
+    ('../assets/models/vosk-model-small-cn-0.22', 'assets/models/vosk-model-small-cn-0.22'),
 ]
 binaries = []
 hiddenimports = [
@@ -15,9 +15,8 @@ hiddenimports = [
     'mediapipe.tasks.python.vision',
     'mediapipe.tasks.python.vision.core',
     'mediapipe.tasks.python.vision.face_landmarker',
-    'mediapipe.tasks.python.vision.gesture_recognizer',
-    'mediapipe.tasks.python.vision.gesture_recognizer_result',
-    'mediapipe.tasks.python.components.processors.classifier_options',
+    'vosk',
+    'sounddevice',
 ]
 binaries += collect_dynamic_libs('mediapipe')
 

@@ -1,4 +1,4 @@
-"""Dual-mode hand page turning and head scrolling application."""
+"""Dual-mode voice page turning and head scrolling application."""
 
 import sys
 import time
@@ -17,13 +17,12 @@ from PySide6.QtWidgets import QApplication
 from calibration import Calibrator
 from capture import Camera
 from control.intent_fsm import FSMState, IntentFSM
-from control.page_turn_fsm import PageAction, PageTurnFSM
 from control.scroll_controller import ScrollController
 from injection import PlatformInjector
 from processing import GazeFilter
 from tracking.face_tracker import FaceTracker
 from tracking.feature_extractor import BlinkState, FeatureExtractor, FeaturePacket
-from tracking.hand_gesture import HandGestureFrame, HandGestureTracker
+from tracking.speech_recognizer import CommandParser, SpeechRecognizer, VoiceCommand
 from ui import MainWindow
 from ui.settings_dialog import SettingsDialog
 from ui.styles import apply_theme
@@ -32,6 +31,7 @@ from utils import Config, get_logger, setup_logging
 
 class WorkerSignals(QObject):
     frame_processed = Signal(object)
+    transcript_recognized = Signal(str)
     state_updated = Signal(str, bool)
     action_triggered = Signal(str)
     error_occurred = Signal(str, str)
@@ -52,7 +52,9 @@ class InteractionController:
         self.tracker: Optional[object] = None
         self.feature_extractor: Optional[FeatureExtractor] = None
         self.calibrator = Calibrator()
-        self.page_fsm: PageTurnFSM
+        self.speech_recognizer: Optional[SpeechRecognizer] = None
+        self._voice_paused = False
+        self._last_voice_action_at = 0.0
         self.head_fsm: IntentFSM
         self.gaze_filter: GazeFilter
         self.scroll_controller: ScrollController
@@ -70,20 +72,6 @@ class InteractionController:
         self._running = False
 
     def _configure_mode_components(self) -> None:
-        gesture = self.config.gesture
-        self.page_fsm = PageTurnFSM(
-            arm_duration_ms=gesture.arm_duration_ms,
-            min_swipe_distance=gesture.min_swipe_distance,
-            max_vertical_drift=gesture.max_vertical_drift,
-            max_swipe_duration_ms=gesture.max_swipe_duration_ms,
-            cooldown_ms=gesture.cooldown_ms,
-            fist_hold_ms=gesture.fist_hold_ms,
-            arm_stability_radius=gesture.arm_stability_radius,
-            min_swipe_duration_ms=gesture.min_swipe_duration_ms,
-            min_swipe_speed=gesture.min_swipe_speed,
-            direction_consistency=gesture.direction_consistency,
-            activation_gesture=gesture.activation_gesture,
-        )
         thresholds = self.config.thresholds
         blink = self.config.blink
         self.head_fsm = IntentFSM(
@@ -122,20 +110,25 @@ class InteractionController:
         if self._running:
             return True
         try:
-            if self.tracker is None:
-                if self.mode == "hand":
-                    gesture = self.config.gesture
-                    self.tracker = HandGestureTracker(
-                        model_path=gesture.model_path,
-                        min_confidence=gesture.min_confidence,
-                        mirror=gesture.mirror,
-                    )
-                else:
+            if self.mode == "voice":
+                voice = self.config.voice
+                parser = CommandParser(
+                    voice.previous_phrases,
+                    voice.next_phrases,
+                    voice.pause_phrases,
+                    voice.resume_phrases,
+                    voice.wake_words,
+                    voice.require_wake_word,
+                )
+                self.speech_recognizer = SpeechRecognizer(
+                    self._voice_model_path(), parser, voice.device, voice.sample_rate
+                )
+            elif self.tracker is None:
                     self.tracker = FaceTracker()
                     self.feature_extractor = FeatureExtractor()
             if not self.injector.init():
                 raise RuntimeError(self.injector.last_error or "无法初始化输入注入")
-            if not self.camera.start():
+            if self.mode == "head" and not self.camera.start():
                 raise RuntimeError("无法打开摄像头")
         except Exception as exc:
             self.camera.stop()
@@ -145,21 +138,23 @@ class InteractionController:
 
         self._drain_queues()
         self._stop_event.clear()
-        self.page_fsm.resume()
+        self._voice_paused = False
         self.head_fsm.resume()
         self.gaze_filter.reset()
         self.scroll_controller.reset()
         self._frame_count = 0
         self._fps_started_at = time.perf_counter()
-        self._capture_thread = Thread(target=self._capture_loop, daemon=True)
-        self._inference_thread = Thread(target=self._inference_loop, daemon=True)
-        self._control_thread = (
-            Thread(target=self._head_control_loop, daemon=True)
-            if self.mode == "head"
-            else None
-        )
+        if self.mode == "voice":
+            self._capture_thread = None
+            self._inference_thread = Thread(target=self._voice_loop, daemon=True)
+            self._control_thread = None
+        else:
+            self._capture_thread = Thread(target=self._capture_loop, daemon=True)
+            self._inference_thread = Thread(target=self._inference_loop, daemon=True)
+            self._control_thread = Thread(target=self._head_control_loop, daemon=True)
         self._running = True
-        self._capture_thread.start()
+        if self._capture_thread:
+            self._capture_thread.start()
         self._inference_thread.start()
         if self._control_thread:
             self._control_thread.start()
@@ -179,6 +174,7 @@ class InteractionController:
                 thread.join(timeout=1.5)
         self.scroll_controller.stop()
         self.camera.stop()
+        self.speech_recognizer = None
         self.injector.shutdown()
         self._drain_queues()
         self._running = False
@@ -207,9 +203,9 @@ class InteractionController:
         return True
 
     def toggle_pause(self) -> None:
-        if self.mode == "hand":
-            self.page_fsm.toggle_pause()
-            state, paused = self.page_fsm.state.name, self.page_fsm.is_paused
+        if self.mode == "voice":
+            self._voice_paused = not self._voice_paused
+            state, paused = ("PAUSED" if self._voice_paused else "LISTENING"), self._voice_paused
         else:
             self.head_fsm.toggle_pause()
             if self.head_fsm.is_paused:
@@ -218,23 +214,56 @@ class InteractionController:
         self.signals.state_updated.emit(state, paused)
 
     def pause(self) -> None:
-        if self.mode == "hand":
-            self.page_fsm.pause()
+        if self.mode == "voice":
+            self._voice_paused = True
         else:
             self.head_fsm.pause()
             self.scroll_controller.stop()
 
     def resume(self) -> None:
-        if self.mode == "hand":
-            self.page_fsm.resume()
+        if self.mode == "voice":
+            self._voice_paused = False
         else:
             self.head_fsm.resume()
 
     def set_sensitivity(self, value: int) -> None:
-        if self.mode == "hand":
-            self.page_fsm.min_swipe_distance = max(0.08, 0.28 - value * 0.02)
-        else:
+        if self.mode == "head":
             self.scroll_controller.v_max = 1.0 + (value - 1) * 0.55
+
+    def _voice_model_path(self) -> str:
+        if self.config.voice.model_path:
+            return self.config.voice.model_path
+        root = Path(getattr(sys, "_MEIPASS", _ROOT.parent))
+        return str(root / "assets" / "models" / "vosk-model-small-cn-0.22")
+
+    def _voice_loop(self) -> None:
+        try:
+            self.signals.state_updated.emit("LISTENING", self._voice_paused)
+            self.speech_recognizer.run(self._stop_event, self._on_voice_command)
+        except Exception as exc:
+            self._worker_failed("语音识别", exc)
+
+    def _on_voice_command(self, command: VoiceCommand) -> None:
+        self.signals.transcript_recognized.emit(command.transcript)
+        if command.action == "PAUSE":
+            self._voice_paused = True
+        elif command.action == "RESUME":
+            self._voice_paused = False
+        elif not self._voice_paused:
+            now = time.monotonic()
+            if now - self._last_voice_action_at >= self.config.voice.cooldown_ms / 1000:
+                key = (
+                    self.config.voice.next_key
+                    if command.action == "NEXT"
+                    else self.config.voice.previous_key
+                )
+                if not self.injector.press_key(key):
+                    raise RuntimeError(self.injector.last_error or "翻页按键发送失败")
+                self._last_voice_action_at = now
+                self.signals.action_triggered.emit(command.action)
+        self.signals.state_updated.emit(
+            "PAUSED" if self._voice_paused else "LISTENING", self._voice_paused
+        )
 
     def _capture_loop(self) -> None:
         failures = 0
@@ -259,37 +288,10 @@ class InteractionController:
                     frame, timestamp = self._frames.get(timeout=0.1)
                 except Empty:
                     continue
-                if self.mode == "hand":
-                    self._process_hand_frame(frame, timestamp)
-                else:
-                    self._process_head_frame(frame, timestamp)
+                self._process_head_frame(frame, timestamp)
                 self._update_fps()
         except Exception as exc:
             self._worker_failed("视觉识别", exc)
-
-    def _process_hand_frame(self, frame, timestamp: float) -> None:
-        result = self.tracker.process(frame, timestamp)
-        action = self.page_fsm.update(
-            result.gesture,
-            result.palm_x,
-            result.palm_y,
-            result.timestamp,
-            result.handedness,
-        )
-        if action != PageAction.NONE:
-            key = (
-                self.config.gesture.next_key
-                if action == PageAction.NEXT
-                else self.config.gesture.previous_key
-            )
-            if not self.injector.press_key(key):
-                raise RuntimeError(self.injector.last_error or "翻页按键发送失败")
-            self.logger.info("PAGE_%s", action.name)
-            self.signals.action_triggered.emit(action.name)
-        self.signals.frame_processed.emit(result)
-        self.signals.state_updated.emit(
-            self.page_fsm.state.name, self.page_fsm.is_paused
-        )
 
     def _process_head_frame(self, frame, timestamp: float) -> None:
         landmarks = self.tracker.process(frame)
@@ -416,7 +418,7 @@ class InteractionController:
 
     @property
     def is_paused(self) -> bool:
-        return self.page_fsm.is_paused if self.mode == "hand" else self.head_fsm.is_paused
+        return self._voice_paused if self.mode == "voice" else self.head_fsm.is_paused
 
 
 class Application:
@@ -453,6 +455,7 @@ class Application:
         self.window.sensitivity_changed.connect(self.controller.set_sensitivity)
         self.window.exit_requested.connect(self._on_exit)
         self.controller.signals.frame_processed.connect(self._on_frame_processed)
+        self.controller.signals.transcript_recognized.connect(self.window.update_transcript)
         self.controller.signals.state_updated.connect(self._on_state_updated)
         self.controller.signals.action_triggered.connect(self._on_action)
         self.controller.signals.error_occurred.connect(self._on_error)
@@ -512,19 +515,11 @@ class Application:
             self.controller.resume()
 
     def _on_frame_processed(self, frame: object) -> None:
-        if isinstance(frame, HandGestureFrame):
-            self.window.update_detection(
-                frame.hand_present,
-                f"{frame.handedness} {frame.gesture}".strip(),
-                frame.confidence,
-            )
-            self.window.update_position(frame.palm_x)
-        else:
-            self.window.update_detection(frame.face_present, "头部", frame.confidence)
-            self.window.update_position(self.controller.head_preview_position(frame.head_pitch))
-            self.window.update_calibration_value(
-                self.controller.head_preview_position(frame.head_pitch), frame.head_pitch
-            )
+        self.window.update_detection(frame.face_present, "头部", frame.confidence)
+        self.window.update_position(self.controller.head_preview_position(frame.head_pitch))
+        self.window.update_calibration_value(
+            self.controller.head_preview_position(frame.head_pitch), frame.head_pitch
+        )
 
     def _on_state_updated(self, state: str, paused: bool) -> None:
         self.window.update_control_state(state)

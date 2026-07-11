@@ -1,26 +1,22 @@
 {
-  "mode": "hand",
+  "mode": "voice",
   "camera": {
     "index": 0,
     "width": 640,
     "height": 480,
     "target_fps": 30
   },
-  "gesture": {
+  "voice": {
     "model_path": null,
-    "activation_gesture": "Open_Palm",
-    "mirror": true,
-    "min_confidence": 0.7,
-    "arm_duration_ms": 150,
-    "arm_stability_radius": 0.04,
-    "min_swipe_distance": 0.18,
-    "min_swipe_duration_ms": 120,
-    "min_swipe_speed": 0.35,
-    "max_vertical_drift": 0.1,
-    "max_swipe_duration_ms": 700,
-    "direction_consistency": 0.75,
-    "cooldown_ms": 600,
-    "fist_hold_ms": 700,
+    "device": null,
+    "sample_rate": 16000,
+    "cooldown_ms": 800,
+    "require_wake_word": false,
+    "wake_words": ["翻页"],
+    "previous_phrases": ["左", "左翻", "向左", "上一页", "往前"],
+    "next_phrases": ["右", "右翻", "向右", "下一页", "往后"],
+    "pause_phrases": ["暂停", "停止"],
+    "resume_phrases": ["继续", "开始"],
     "previous_key": "Left",
     "next_key": "Right"
   },

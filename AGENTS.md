@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-HeadScroll is a Windows-only Python desktop application. `src/main.py` is the entry point and coordinates capture, inference, control, and the PySide6 UI. Keep domain code in the existing packages: `capture/`, `tracking/`, `calibration/`, `processing/`, `control/`, `injection/`, `ui/`, and `utils/`. Default settings live in `config/default_config.json`; local overrides belong in the ignored `config/config.json`. Store icons and MediaPipe models under `assets/`, and maintenance scripts under `tools/`. Architecture and product notes are the Markdown documents at the repository root.
+HeadScroll is a Windows-only Python desktop application. `src/main.py` coordinates capture, inference, control, and the PySide6 UI. Keep domain code in the existing packages: `capture/`, `tracking/`, `calibration/`, `processing/`, `control/`, `injection/`, `ui/`, and `utils/`. Default settings live in `config/default_config.json`; local overrides belong in the ignored `config/config.json`. Store icons, MediaPipe face models, and Vosk speech models under `assets/`.
 
 ## Build, Test, and Development Commands
 
@@ -26,7 +26,7 @@ Use Python 3.10+ features, four-space indentation, UTF-8, and existing type hint
 
 ## Testing Guidelines
 
-There is currently no automated test suite or coverage threshold. For logic changes, add focused `test_*.py` tests under a new `tests/` directory when practical, using the standard-library `unittest` module unless the project adopts another runner. Always run `python -m compileall -q src`. For camera, calibration, scrolling, or UI changes, also perform a Windows smoke test and document the tested mode and target application in the pull request.
+Tests use the standard-library `unittest` module. Name files `test_*.py` under `tests/` and run `python -m unittest discover -s tests -v`. Always run `python -m compileall -q src`. For microphone, camera, calibration, scrolling, or UI changes, also perform a Windows smoke test and document the tested mode and target application in the pull request.
 
 ## Commit & Pull Request Guidelines
 

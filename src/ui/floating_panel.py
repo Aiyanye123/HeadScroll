@@ -1,4 +1,4 @@
-"""Compact hand-gesture page-turn panel."""
+"""Compact voice page-turn and head-scroll panel."""
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
@@ -26,7 +26,7 @@ class FloatingPanel(QWidget):
     def __init__(self, always_on_top: bool = True):
         super().__init__()
         self._setup_ui()
-        self.setWindowTitle("手势翻页控制")
+        self.setWindowTitle("HeadScroll 控制")
         flags = Qt.WindowType.Window
         if always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
@@ -40,13 +40,13 @@ class FloatingPanel(QWidget):
 
         status_group = QGroupBox("状态")
         status_layout = QVBoxLayout(status_group)
-        self.mode_status = self._add_status_row(status_layout, "控制模式", "手势翻页")
-        self.hand_status = self._add_status_row(status_layout, "手部检测", "--")
-        self.gesture_status = self._add_status_row(status_layout, "识别状态", "WAITING")
+        self.mode_status = self._add_status_row(status_layout, "控制模式", "语音翻页")
+        self.detection_status = self._add_status_row(status_layout, "识别内容", "--")
+        self.control_status = self._add_status_row(status_layout, "控制状态", "WAITING")
         self.action_status = self._add_status_row(status_layout, "最近动作", "--")
         self.fps_label = self._add_status_row(status_layout, "FPS", "--")
         palm_row = QHBoxLayout()
-        palm_row.addWidget(QLabel("掌心位置"))
+        palm_row.addWidget(QLabel("头部位置"))
         self.palm_bar = QProgressBar()
         self.palm_bar.setRange(0, 100)
         self.palm_bar.setValue(50)
@@ -69,7 +69,7 @@ class FloatingPanel(QWidget):
         control_layout.addWidget(self.pause_btn)
         layout.addWidget(control_group)
 
-        self.sensitivity_group = QGroupBox("手势灵敏度")
+        self.sensitivity_group = QGroupBox("控制强度")
         sensitivity_layout = QHBoxLayout(self.sensitivity_group)
         self.sensitivity_slider = QSlider(Qt.Orientation.Horizontal)
         self.sensitivity_slider.setRange(1, 10)
@@ -121,31 +121,14 @@ class FloatingPanel(QWidget):
 
     def set_mode(self, mode: str) -> None:
         is_head = mode == "head"
-        self.mode_status.setText("头部滚动" if is_head else "手势翻页")
+        self.mode_status.setText("头部滚动" if is_head else "语音翻页")
         self.calibrate_btn.setEnabled(is_head)
-        self.sensitivity_group.setTitle("滚动速度" if is_head else "手势灵敏度")
+        self.sensitivity_group.setVisible(is_head)
+        self.palm_bar.setVisible(is_head)
         self.action_status.setText("--")
-
-    def update_hand_status(
-        self,
-        present: bool,
-        gesture: str,
-        confidence: float,
-        handedness: str,
-    ) -> None:
-        if present:
-            hand = f"{handedness} " if handedness else ""
-            self.hand_status.setText(f"{hand}{gesture} {confidence:.0%}")
-            self.hand_status.setStyleSheet(f"font-weight: 600; color: {COLORS['success']};")
-        else:
-            self.hand_status.setText("未检测")
-            self.hand_status.setStyleSheet(f"font-weight: 600; color: {COLORS['danger']};")
 
     def update_palm(self, palm_x: float | None) -> None:
         self.palm_bar.setValue(50 if palm_x is None else int(palm_x * 100))
-
-    def update_gesture_state(self, state: str) -> None:
-        self.gesture_status.setText(state)
 
     def update_last_action(self, action: str) -> None:
         self.action_status.setText(action)
@@ -156,10 +139,20 @@ class FloatingPanel(QWidget):
     def update_detection(
         self, present: bool, label: str, confidence: float
     ) -> None:
-        self.update_hand_status(present, label, confidence, "")
+        if present:
+            self.detection_status.setText(f"{label} {confidence:.0%}")
+            color = COLORS["success"]
+        else:
+            self.detection_status.setText("未检测")
+            color = COLORS["danger"]
+        self.detection_status.setStyleSheet(f"font-weight: 600; color: {color};")
 
     def update_position(self, position: float | None) -> None:
         self.update_palm(position)
 
     def update_control_state(self, state: str) -> None:
-        self.update_gesture_state(state)
+        self.control_status.setText(state)
+
+    def update_transcript(self, transcript: str) -> None:
+        self.detection_status.setText(transcript or "--")
+        self.detection_status.setStyleSheet(f"font-weight: 600; color: {COLORS['success']};")

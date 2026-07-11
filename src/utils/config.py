@@ -70,30 +70,30 @@ class UIConfig:
 
 
 @dataclass
-class GestureConfig:
+class VoiceConfig:
     model_path: Optional[str] = None
-    activation_gesture: str = "Open_Palm"
-    mirror: bool = True
-    min_confidence: float = 0.7
-    arm_duration_ms: float = 150
-    arm_stability_radius: float = 0.04
-    min_swipe_distance: float = 0.18
-    min_swipe_duration_ms: float = 120
-    min_swipe_speed: float = 0.35
-    max_vertical_drift: float = 0.10
-    max_swipe_duration_ms: float = 700
-    direction_consistency: float = 0.75
-    cooldown_ms: float = 600
-    fist_hold_ms: float = 700
+    device: Optional[int] = None
+    sample_rate: int = 16000
+    cooldown_ms: float = 800
+    require_wake_word: bool = False
+    wake_words: list[str] = field(default_factory=lambda: ["翻页"])
+    previous_phrases: list[str] = field(
+        default_factory=lambda: ["左", "左翻", "向左", "上一页", "往前"]
+    )
+    next_phrases: list[str] = field(
+        default_factory=lambda: ["右", "右翻", "向右", "下一页", "往后"]
+    )
+    pause_phrases: list[str] = field(default_factory=lambda: ["暂停", "停止"])
+    resume_phrases: list[str] = field(default_factory=lambda: ["继续", "开始"])
     previous_key: str = "Left"
     next_key: str = "Right"
 
 
 @dataclass
 class AppConfig:
-    mode: str = "hand"
+    mode: str = "voice"
     camera: CameraConfig = field(default_factory=CameraConfig)
-    gesture: GestureConfig = field(default_factory=GestureConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
@@ -152,12 +152,14 @@ class Config:
         config = AppConfig()
         legacy_calibration = data.get("calibration", {})
         config.mode = data.get("mode") or (
-            "head" if legacy_calibration.get("mode") == "head" else "hand"
+            "head" if legacy_calibration.get("mode") == "head" else "voice"
         )
+        if config.mode == "hand":
+            config.mode = "voice"
         if "camera" in data:
             config.camera = CameraConfig(**data["camera"])
-        if "gesture" in data:
-            config.gesture = GestureConfig(**data["gesture"])
+        if "voice" in data:
+            config.voice = VoiceConfig(**data["voice"])
         if "calibration" in data:
             calibration = data["calibration"]
             config.calibration = CalibrationConfig(**{
@@ -209,38 +211,39 @@ class Config:
 
     @staticmethod
     def _validate(config: AppConfig) -> None:
-        gesture = config.gesture
-        if config.mode not in {"hand", "head"}:
-            raise ValueError("mode must be hand or head")
+        voice = config.voice
+        if config.mode not in {"voice", "head"}:
+            raise ValueError("mode must be voice or head")
         if config.camera.index < 0:
             raise ValueError("camera.index must be non-negative")
         if min(config.camera.width, config.camera.height, config.camera.target_fps) <= 0:
             raise ValueError("camera dimensions and FPS must be positive")
-        if not 0.0 <= gesture.min_confidence <= 1.0:
-            raise ValueError("gesture.min_confidence must be between 0 and 1")
-        for name in ("min_swipe_distance", "max_vertical_drift", "arm_stability_radius"):
-            if not 0.0 < getattr(gesture, name) < 1.0:
-                raise ValueError(f"gesture.{name} must be between 0 and 1")
-        if not 0.5 <= gesture.direction_consistency <= 1.0:
-            raise ValueError("gesture.direction_consistency must be between 0.5 and 1")
-        if gesture.min_swipe_speed <= 0:
-            raise ValueError("gesture.min_swipe_speed must be positive")
-        if gesture.min_swipe_duration_ms >= gesture.max_swipe_duration_ms:
-            raise ValueError("minimum swipe duration must be less than maximum")
-        for name in ("arm_duration_ms", "cooldown_ms", "fist_hold_ms"):
-            if getattr(gesture, name) < 0:
-                raise ValueError(f"gesture.{name} must be non-negative")
+        if voice.sample_rate <= 0 or voice.cooldown_ms < 0:
+            raise ValueError("voice sample rate and cooldown are invalid")
+        if voice.device is not None and voice.device < 0:
+            raise ValueError("voice device index must be non-negative")
+        phrase_groups = (
+            voice.previous_phrases,
+            voice.next_phrases,
+            voice.pause_phrases,
+            voice.resume_phrases,
+        )
+        if any(not group or any(not phrase.strip() for phrase in group) for group in phrase_groups):
+            raise ValueError("voice command phrase groups cannot be empty")
+        flattened = [phrase.strip() for group in phrase_groups for phrase in group]
+        if len(flattened) != len(set(flattened)):
+            raise ValueError("voice command phrases must be unique across actions")
+        if voice.require_wake_word and not any(word.strip() for word in voice.wake_words):
+            raise ValueError("wake word is required but none is configured")
         supported_keys = {"Left", "Right", "PageUp", "PageDown"}
-        if gesture.previous_key not in supported_keys or gesture.next_key not in supported_keys:
+        if voice.previous_key not in supported_keys or voice.next_key not in supported_keys:
             raise ValueError("unsupported page key")
-        if gesture.previous_key == gesture.next_key:
+        if voice.previous_key == voice.next_key:
             raise ValueError("previous and next page keys must differ")
         if not config.ui.hotkeys.toggle_pause or not config.ui.hotkeys.emergency_stop:
             raise ValueError("hotkeys cannot be empty")
-        if not gesture.activation_gesture.strip():
-            raise ValueError("gesture.activation_gesture cannot be empty")
-        if gesture.model_path and Path(gesture.model_path).suffix.lower() != ".task":
-            raise ValueError("gesture.model_path must point to a .task model")
+        if voice.model_path and not Path(voice.model_path).is_dir():
+            raise ValueError("voice.model_path must point to a model directory")
         if not 0.0 < config.filter.ema_alpha < 1.0:
             raise ValueError("filter.ema_alpha must be between 0 and 1")
         if not 0.0 <= config.filter.confidence_min <= 1.0:
@@ -261,8 +264,8 @@ class Config:
         return self._config.camera
 
     @property
-    def gesture(self) -> GestureConfig:
-        return self._config.gesture
+    def voice(self) -> VoiceConfig:
+        return self._config.voice
 
     @property
     def mode(self) -> str:

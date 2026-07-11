@@ -43,7 +43,7 @@ class TrayIcon(QSystemTrayIcon):
         super().__init__(parent)
         
         self.setIcon(create_default_icon())
-        self.setToolTip("手势翻页控制")
+        self.setToolTip("HeadScroll 语音翻页与头部滚动")
         
         self._is_running = False
         self._is_paused = False

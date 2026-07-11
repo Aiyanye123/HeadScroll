@@ -11,20 +11,20 @@ from utils.config import Config
 
 
 class ConfigTest(unittest.TestCase):
-    def test_gesture_settings_round_trip_through_user_config(self):
+    def test_voice_settings_round_trip_through_user_config(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(directory)
-            config.gesture.min_swipe_distance = 0.22
+            config.voice.previous_phrases = ["左", "向左"]
             self.assertTrue(config.save())
 
             loaded = Config(directory)
             self.assertTrue(loaded.load())
-            self.assertEqual(loaded.gesture.min_swipe_distance, 0.22)
+            self.assertEqual(loaded.voice.previous_phrases, ["左", "向左"])
 
-    def test_invalid_gesture_settings_are_not_saved(self):
+    def test_invalid_voice_settings_are_not_saved(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Config(directory)
-            config.gesture.direction_consistency = 1.5
+            config.voice.previous_phrases = []
             self.assertFalse(config.save())
             self.assertFalse((Path(directory) / "config" / "config.json").exists())
 
@@ -33,17 +33,28 @@ class ConfigTest(unittest.TestCase):
             config_dir = Path(directory) / "config"
             config_dir.mkdir()
             (config_dir / "config.json").write_text(
-                json.dumps({"gesture": {"min_swipe_distance": -1}}),
+                json.dumps({"voice": {"sample_rate": -1}}),
                 encoding="utf-8",
             )
             (config_dir / "default_config.json").write_text(
-                json.dumps({"gesture": {"min_swipe_distance": 0.2}}),
+                json.dumps({"voice": {"sample_rate": 16000}}),
                 encoding="utf-8",
             )
 
             config = Config(directory)
             self.assertTrue(config.load())
-            self.assertEqual(config.gesture.min_swipe_distance, 0.2)
+            self.assertEqual(config.voice.sample_rate, 16000)
+
+    def test_migrates_hand_mode_to_voice(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config_dir = Path(directory) / "config"
+            config_dir.mkdir()
+            (config_dir / "config.json").write_text(
+                json.dumps({"mode": "hand"}), encoding="utf-8"
+            )
+            config = Config(directory)
+            self.assertTrue(config.load())
+            self.assertEqual(config.mode, "voice")
 
     def test_migrates_legacy_head_mode_and_ignores_removed_fields(self):
         with tempfile.TemporaryDirectory() as directory:
