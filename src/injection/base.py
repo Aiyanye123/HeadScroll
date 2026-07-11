@@ -31,6 +31,11 @@ class InputInjector(ABC):
             是否成功发送
         """
         pass
+
+    @abstractmethod
+    def press_key(self, key: str) -> bool:
+        """发送一次按键。"""
+        pass
     
     @abstractmethod
     def shutdown(self) -> None:

@@ -1,5 +1,4 @@
 """控制模块"""
-from .intent_fsm import IntentFSM, FSMState
-from .scroll_controller import ScrollController
+from .page_turn_fsm import PageAction, PageTurnFSM, PageTurnState
 
-__all__ = ["IntentFSM", "FSMState", "ScrollController"]
+__all__ = ["PageAction", "PageTurnFSM", "PageTurnState"]

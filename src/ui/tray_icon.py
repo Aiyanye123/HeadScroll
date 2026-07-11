@@ -18,14 +18,12 @@ def create_default_icon() -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     
-    # 绘制眼睛形状
+    # 简单手掌图标
     painter.setBrush(QBrush(QColor(COLORS["primary"])))
     painter.setPen(QColor(COLORS["primary_pressed"]))
-    painter.drawEllipse(4, 8, 24, 16)
-    
-    # 绘制瞳孔
-    painter.setBrush(QBrush(QColor(COLORS["background"])))
-    painter.drawEllipse(12, 12, 8, 8)
+    painter.drawRoundedRect(9, 13, 15, 14, 4, 4)
+    for x, height in ((10, 9), (14, 6), (18, 5), (22, 8)):
+        painter.drawRoundedRect(x, height, 3, 12, 1, 1)
     
     painter.end()
     return QIcon(pixmap)
@@ -39,14 +37,13 @@ class TrayIcon(QSystemTrayIcon):
     start_clicked = Signal()
     stop_clicked = Signal()
     pause_clicked = Signal()
-    calibrate_clicked = Signal()
     exit_clicked = Signal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
         
         self.setIcon(create_default_icon())
-        self.setToolTip("眼动滚动控制")
+        self.setToolTip("手势翻页控制")
         
         self._is_running = False
         self._is_paused = False
@@ -74,12 +71,6 @@ class TrayIcon(QSystemTrayIcon):
         self.pause_action = menu.addAction("暂停")
         self.pause_action.setEnabled(False)
         self.pause_action.triggered.connect(self._on_pause_clicked)
-        
-        menu.addSeparator()
-        
-        # 重新标定
-        self.calibrate_action = menu.addAction("重新标定")
-        self.calibrate_action.triggered.connect(self.calibrate_clicked.emit)
         
         menu.addSeparator()
         

@@ -1,5 +1,4 @@
-"""人脸追踪与特征提取模块"""
-from .face_tracker import FaceTracker
-from .feature_extractor import FeatureExtractor, FeaturePacket, BlinkState
+"""视觉追踪模块。"""
+from .hand_gesture import HandGestureFrame, HandGestureTracker
 
-__all__ = ["FaceTracker", "FeatureExtractor", "FeaturePacket", "BlinkState"]
+__all__ = ["HandGestureFrame", "HandGestureTracker"]

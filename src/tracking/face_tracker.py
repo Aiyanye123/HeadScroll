@@ -184,7 +184,7 @@ class FaceTracker:
             return model_file
         except UnicodeEncodeError:
             pass
-        temp_root = Path(tempfile.gettempdir()) / "EyeScroll" / "models"
+        temp_root = Path(tempfile.gettempdir()) / "HeadScroll" / "models"
         temp_root.mkdir(parents=True, exist_ok=True)
         temp_path = temp_root / model_file.name
         if model_file.exists():

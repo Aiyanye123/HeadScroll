@@ -1,13 +1,13 @@
-# 眼动控制网页漫画滚动 - Python 依赖
+# HeadScroll runtime dependencies
 
 # 图像采集与处理
-opencv-python>=4.8.0
+opencv-python>=4.8.0,<5
 
 # 人脸/眼部关键点检测
-mediapipe>=0.10.0
+mediapipe>=0.10.31,<0.11
 
 # GUI 框架
-PySide6>=6.5.0
+PySide6>=6.5.0,<7
 
 # 数值计算
-numpy>=1.24.0
+numpy>=1.24.0,<2

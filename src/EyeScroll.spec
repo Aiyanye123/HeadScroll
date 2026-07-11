@@ -3,6 +3,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 datas = [
     ('../config', 'config'),
+    ('../assets/models/gesture_recognizer.task', 'assets/models'),
     ('../assets/models/face_landmarker.task', 'assets/models'),
 ]
 binaries = []
@@ -52,7 +53,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='EyeScroll',
+    name='HeadScroll',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -72,5 +73,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='EyeScroll',
+    name='HeadScroll',
 )

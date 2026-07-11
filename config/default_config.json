@@ -1,24 +1,32 @@
 {
+  "mode": "hand",
   "camera": {
     "index": 0,
     "width": 640,
     "height": 480,
     "target_fps": 30
   },
-  "calibration": {
-    "r_top": 0.25,
-    "r_mid": 0.50,
-    "r_bottom": 0.75,
-    "method": "linear",
-    "mode": "head",
-    "head_pitch_min": -0.12,
-    "head_pitch_max": 0.12,
-    "head_pitch_center": 0.2,
-    "timestamp": null
+  "gesture": {
+    "mirror": true,
+    "min_confidence": 0.7,
+    "arm_duration_ms": 150,
+    "arm_stability_radius": 0.04,
+    "min_swipe_distance": 0.18,
+    "min_swipe_duration_ms": 120,
+    "min_swipe_speed": 0.35,
+    "max_vertical_drift": 0.1,
+    "max_swipe_duration_ms": 700,
+    "direction_consistency": 0.75,
+    "cooldown_ms": 600,
+    "fist_hold_ms": 700,
+    "previous_key": "Left",
+    "next_key": "Right"
   },
-  "fusion": {
-    "w_gaze": 0.8,
-    "w_pitch": 0.2
+  "calibration": {
+    "r_top": -0.12,
+    "r_mid": 0.0,
+    "r_bottom": 0.12,
+    "timestamp": null
   },
   "filter": {
     "ema_alpha": 0.75,
@@ -44,15 +52,9 @@
   },
   "ui": {
     "always_on_top": true,
-    "show_overlay": false,
     "hotkeys": {
       "toggle_pause": "Ctrl+Shift+Space",
       "emergency_stop": "Escape"
     }
-  },
-  "injection": {
-    "target": "cursor",
-    "process_name": null,
-    "smooth_scroll": true
   }
 }
