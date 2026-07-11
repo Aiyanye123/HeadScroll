@@ -82,6 +82,7 @@ class InteractionController:
             min_swipe_duration_ms=gesture.min_swipe_duration_ms,
             min_swipe_speed=gesture.min_swipe_speed,
             direction_consistency=gesture.direction_consistency,
+            activation_gesture=gesture.activation_gesture,
         )
         thresholds = self.config.thresholds
         blink = self.config.blink
@@ -125,6 +126,7 @@ class InteractionController:
                 if self.mode == "hand":
                     gesture = self.config.gesture
                     self.tracker = HandGestureTracker(
+                        model_path=gesture.model_path,
                         min_confidence=gesture.min_confidence,
                         mirror=gesture.mirror,
                     )
@@ -417,9 +419,6 @@ class InteractionController:
         return self.page_fsm.is_paused if self.mode == "hand" else self.head_fsm.is_paused
 
 
-HandPageController = InteractionController
-
-
 class Application:
     def __init__(self) -> None:
         self.controller = InteractionController()
@@ -500,6 +499,7 @@ class Application:
         calibration.r_mid = middle
         calibration.r_bottom = bottom
         calibration.timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
+        calibration.pose_source = "matrix"
         if not self.controller.config.save():
             self.window.show_error("标定失败", "无法保存标定参数")
         self._finish_calibration()

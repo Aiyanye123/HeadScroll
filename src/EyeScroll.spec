@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_dynamic_libs
 
 datas = [
     ('../config', 'config'),
@@ -15,9 +15,11 @@ hiddenimports = [
     'mediapipe.tasks.python.vision',
     'mediapipe.tasks.python.vision.core',
     'mediapipe.tasks.python.vision.face_landmarker',
+    'mediapipe.tasks.python.vision.gesture_recognizer',
+    'mediapipe.tasks.python.vision.gesture_recognizer_result',
+    'mediapipe.tasks.python.components.processors.classifier_options',
 ]
 binaries += collect_dynamic_libs('mediapipe')
-hiddenimports += collect_submodules('mediapipe.tasks')
 
 
 import os

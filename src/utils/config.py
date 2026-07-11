@@ -24,6 +24,7 @@ class CalibrationConfig:
     r_mid: float = 0.0
     r_bottom: float = 0.12
     timestamp: Optional[str] = None
+    pose_source: str = "matrix"
 
 
 @dataclass
@@ -70,6 +71,8 @@ class UIConfig:
 
 @dataclass
 class GestureConfig:
+    model_path: Optional[str] = None
+    activation_gesture: str = "Open_Palm"
     mirror: bool = True
     min_confidence: float = 0.7
     arm_duration_ms: float = 150
@@ -110,7 +113,7 @@ class Config:
             self.default_config_path = self.config_dir / self.DEFAULT_CONFIG_NAME
         elif getattr(sys, "frozen", False):
             resource_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
-            self.app_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "HandPage"
+            self.app_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "HeadScroll"
             self.config_dir = self.app_dir
             self.default_config_path = resource_root / "config" / self.DEFAULT_CONFIG_NAME
         else:
@@ -159,9 +162,11 @@ class Config:
             calibration = data["calibration"]
             config.calibration = CalibrationConfig(**{
                 name: calibration[name]
-                for name in ("r_top", "r_mid", "r_bottom", "timestamp")
+                for name in ("r_top", "r_mid", "r_bottom", "timestamp", "pose_source")
                 if name in calibration
             })
+            if calibration.get("pose_source") != "matrix":
+                config.calibration.timestamp = None
         if "filter" in data:
             config.filter = FilterConfig(**data["filter"])
         if "thresholds" in data:
@@ -232,6 +237,10 @@ class Config:
             raise ValueError("previous and next page keys must differ")
         if not config.ui.hotkeys.toggle_pause or not config.ui.hotkeys.emergency_stop:
             raise ValueError("hotkeys cannot be empty")
+        if not gesture.activation_gesture.strip():
+            raise ValueError("gesture.activation_gesture cannot be empty")
+        if gesture.model_path and Path(gesture.model_path).suffix.lower() != ".task":
+            raise ValueError("gesture.model_path must point to a .task model")
         if not 0.0 < config.filter.ema_alpha < 1.0:
             raise ValueError("filter.ema_alpha must be between 0 and 1")
         if not 0.0 <= config.filter.confidence_min <= 1.0:
@@ -240,6 +249,8 @@ class Config:
             raise ValueError("head scroll thresholds are invalid")
         if min(config.scroll.v_max, config.scroll.gamma, config.scroll.tick_hz) <= 0:
             raise ValueError("scroll speed, gamma, and tick rate must be positive")
+        if config.calibration.pose_source != "matrix":
+            raise ValueError("unsupported head pose source")
 
     @property
     def config(self) -> AppConfig:

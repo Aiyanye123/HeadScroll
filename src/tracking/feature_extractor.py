@@ -219,6 +219,10 @@ class FeatureExtractor:
         使用鼻尖和下巴的相对位置估计
         """
         try:
+            if landmarks.transformation_matrix is not None:
+                rotation = landmarks.transformation_matrix[:3, :3]
+                return float(np.arctan2(rotation[2, 1], rotation[2, 2]))
+
             nose = landmarks.get_point(FaceTracker.NOSE_TIP)
             chin = landmarks.get_point(FaceTracker.CHIN)
             

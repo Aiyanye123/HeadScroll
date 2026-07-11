@@ -32,6 +32,7 @@ class PageTurnFSM:
         min_swipe_duration_ms: float = 120,
         min_swipe_speed: float = 0.35,
         direction_consistency: float = 0.75,
+        activation_gesture: str = "Open_Palm",
     ) -> None:
         self.arm_duration_ms = arm_duration_ms
         self.min_swipe_distance = min_swipe_distance
@@ -43,6 +44,7 @@ class PageTurnFSM:
         self.min_swipe_duration_ms = min_swipe_duration_ms
         self.min_swipe_speed = min_swipe_speed
         self.direction_consistency = direction_consistency
+        self.activation_gesture = activation_gesture
         self._state = PageTurnState.WAITING
         self._started_at: Optional[float] = None
         self._anchor_x: Optional[float] = None
@@ -66,7 +68,11 @@ class PageTurnFSM:
         if self._state == PageTurnState.PAUSED:
             return PageAction.NONE
 
-        is_open = gesture == "Open_Palm" and palm_x is not None and palm_y is not None
+        is_open = (
+            gesture == self.activation_gesture
+            and palm_x is not None
+            and palm_y is not None
+        )
         if self._state == PageTurnState.COOLDOWN:
             if timestamp >= self._cooldown_until and not is_open:
                 self._reset()

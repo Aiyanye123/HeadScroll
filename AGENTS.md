@@ -14,10 +14,11 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 python src\main.py
 python -m compileall -q src
+python -m pip install -r requirements-dev.txt
 pyinstaller --noconfirm src\EyeScroll.spec
 ```
 
-The first three commands create the environment, install dependencies, and launch the app. `compileall` is the current lightweight syntax check. PyInstaller produces the Windows bundle in `dist/` and temporary files in `build/`.
+The first three commands create the environment, install runtime dependencies, and launch the app. `compileall` is the lightweight syntax check. Install development dependencies before using PyInstaller; it produces the Windows bundle in `dist/` and temporary files in `build/`.
 
 ## Coding Style & Naming Conventions
 

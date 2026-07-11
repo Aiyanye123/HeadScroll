@@ -101,6 +101,9 @@ class HandGestureTracker:
     def _resolve_model_path(model_path: Optional[str]) -> Path:
         if model_path:
             path = Path(model_path).expanduser()
+            if not path.exists():
+                raise FileNotFoundError(f"Custom gesture model not found: {path}")
+            return path
         elif getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
             path = Path(sys._MEIPASS) / "assets" / "models" / "gesture_recognizer.task"
         else:

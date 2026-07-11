@@ -14,6 +14,8 @@ HeadScroll 使用普通摄像头提供两种免手持控制方式：张开手掌
 
 识别会检查手掌稳定时间、横向位移、速度、垂直漂移、方向一致性和换手情况。翻页后必须收回手掌并等待冷却，避免连续误触发。
 
+设置中可以选择由 MediaPipe Model Maker 导出的自定义 `.task` 手势模型，并填写用于启动挥动轨迹的类别名；留空时使用仓库内置的官方模型。
+
 ### 头部滚动
 
 | 动作 | 结果 |
@@ -49,6 +51,7 @@ python -m compileall -q src tests
 ## 打包
 
 ```powershell
+python -m pip install -r requirements-dev.txt
 pyinstaller --noconfirm src\EyeScroll.spec
 ```
 

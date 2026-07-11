@@ -30,6 +30,7 @@ class FaceLandmarks:
     # 图像尺寸
     image_width: int
     image_height: int
+    transformation_matrix: Optional[np.ndarray] = None
     
     def get_point(self, index: int) -> np.ndarray:
         """获取指定索引的关键点坐标 (x, y, z)"""
@@ -146,6 +147,7 @@ class FaceTracker:
             min_face_detection_confidence=min_detection_confidence,
             min_face_presence_confidence=min_tracking_confidence,
             min_tracking_confidence=min_tracking_confidence,
+            output_facial_transformation_matrixes=True,
         )
         self._face_landmarker = vision.FaceLandmarker.create_from_options(options)
 
@@ -223,6 +225,11 @@ class FaceTracker:
             landmarks = np.zeros((num_landmarks, 3), dtype=np.float32)
             for i, lm in enumerate(face_landmarks):
                 landmarks[i] = [lm.x, lm.y, lm.z]
+            transformation_matrix = (
+                np.asarray(results.facial_transformation_matrixes[0], dtype=np.float32)
+                if results.facial_transformation_matrixes
+                else None
+            )
         else:
             results = self._face_mesh.process(rgb_frame)
             if not results.multi_face_landmarks:
@@ -235,11 +242,13 @@ class FaceTracker:
                 if i >= num_landmarks:
                     break
                 landmarks[i] = [lm.x, lm.y, lm.z]
+            transformation_matrix = None
         
         return FaceLandmarks(
             landmarks=landmarks,
             image_width=w,
-            image_height=h
+            image_height=h,
+            transformation_matrix=transformation_matrix,
         )
     
     def close(self) -> None:

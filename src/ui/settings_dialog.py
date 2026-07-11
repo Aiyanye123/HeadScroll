@@ -7,7 +7,11 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFileDialog,
+    QHBoxLayout,
     QKeySequenceEdit,
+    QLineEdit,
+    QPushButton,
     QMessageBox,
     QSpinBox,
     QVBoxLayout,
@@ -27,6 +31,18 @@ class SettingsDialog(QDialog):
         self.mode.addItem("手势左右翻页", "hand")
         self.mode.addItem("抬头/低头上下滚动", "head")
         form.addRow("控制模式:", self.mode)
+
+        model_row = QHBoxLayout()
+        self.model_path = QLineEdit()
+        self.model_path.setPlaceholderText("留空使用内置官方模型")
+        model_button = QPushButton("选择")
+        model_button.clicked.connect(self._pick_model)
+        model_row.addWidget(self.model_path)
+        model_row.addWidget(model_button)
+        form.addRow("自定义手势模型:", model_row)
+
+        self.activation_gesture = QLineEdit()
+        form.addRow("轨迹启动类别:", self.activation_gesture)
 
         self.mirror = QCheckBox("按镜像画面解释左右方向")
         form.addRow("摄像头:", self.mirror)
@@ -122,9 +138,18 @@ class SettingsDialog(QDialog):
         index = combo.findData(value)
         combo.setCurrentIndex(max(0, index))
 
+    def _pick_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择 MediaPipe 手势模型", "", "MediaPipe Task (*.task)"
+        )
+        if path:
+            self.model_path.setText(path)
+
     def _load(self) -> None:
         cfg = self._config.gesture
         self._select(self.mode, self._config.mode)
+        self.model_path.setText(cfg.model_path or "")
+        self.activation_gesture.setText(cfg.activation_gesture)
         self.mirror.setChecked(cfg.mirror)
         self.confidence.setValue(cfg.min_confidence)
         self.distance.setValue(cfg.min_swipe_distance)
@@ -151,6 +176,8 @@ class SettingsDialog(QDialog):
             return
         cfg = self._config.gesture
         self._config.config.mode = self.mode.currentData()
+        cfg.model_path = self.model_path.text().strip() or None
+        cfg.activation_gesture = self.activation_gesture.text().strip()
         cfg.mirror = self.mirror.isChecked()
         cfg.min_confidence = self.confidence.value()
         cfg.min_swipe_distance = self.distance.value()

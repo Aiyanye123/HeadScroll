@@ -7,6 +7,8 @@
     "target_fps": 30
   },
   "gesture": {
+    "model_path": null,
+    "activation_gesture": "Open_Palm",
     "mirror": true,
     "min_confidence": 0.7,
     "arm_duration_ms": 150,
@@ -26,7 +28,8 @@
     "r_top": -0.12,
     "r_mid": 0.0,
     "r_bottom": 0.12,
-    "timestamp": null
+    "timestamp": null,
+    "pose_source": "matrix"
   },
   "filter": {
     "ema_alpha": 0.75,
