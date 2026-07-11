@@ -54,6 +54,11 @@ class SettingsDialog(QDialog):
         form.addRow("麦克风:", self.device)
         self.require_wake = QCheckBox("必须先说唤醒词")
         form.addRow("防误触:", self.require_wake)
+        self.latency_mode = QComboBox()
+        self.latency_mode.addItem("均衡（推荐）", "balanced")
+        self.latency_mode.addItem("快速", "fast")
+        self.latency_mode.addItem("准确", "accurate")
+        form.addRow("响应速度:", self.latency_mode)
         self.wake_words = QLineEdit()
         form.addRow("唤醒词:", self.wake_words)
         self.previous_phrases = QLineEdit()
@@ -126,6 +131,7 @@ class SettingsDialog(QDialog):
         self.model_path.setText(voice.model_path or "")
         self._select(self.device, voice.device)
         self.require_wake.setChecked(voice.require_wake_word)
+        self._select(self.latency_mode, voice.latency_mode)
         for widget, values in (
             (self.wake_words, voice.wake_words),
             (self.previous_phrases, voice.previous_phrases),
@@ -164,6 +170,7 @@ class SettingsDialog(QDialog):
         voice.model_path = self.model_path.text().strip() or None
         voice.device = self.device.currentData()
         voice.require_wake_word = self.require_wake.isChecked()
+        voice.latency_mode = self.latency_mode.currentData()
         voice.wake_words = self._phrases(self.wake_words.text())
         (voice.previous_phrases, voice.next_phrases,
          voice.pause_phrases, voice.resume_phrases) = groups

@@ -121,7 +121,8 @@ class InteractionController:
                     voice.require_wake_word,
                 )
                 self.speech_recognizer = SpeechRecognizer(
-                    self._voice_model_path(), parser, voice.device, voice.sample_rate
+                    self._voice_model_path(), parser, voice.device,
+                    voice.sample_rate, voice.latency_mode
                 )
             elif self.tracker is None:
                     self.tracker = FaceTracker()

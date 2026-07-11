@@ -15,6 +15,36 @@ class VoiceCommand:
     transcript: str
 
 
+class PartialCommandGate:
+    """Trigger a page command once per utterance after stable partial results."""
+
+    def __init__(self, required_repeats: int) -> None:
+        self.required_repeats = required_repeats
+        self._candidate: Optional[VoiceCommand] = None
+        self._repeats = 0
+        self.triggered = False
+
+    def update(self, command: Optional[VoiceCommand]) -> Optional[VoiceCommand]:
+        if self.required_repeats <= 0 or self.triggered or command is None:
+            return None
+        if command.action not in {"PREVIOUS", "NEXT"}:
+            return None
+        if self._candidate and self._candidate.action == command.action:
+            self._repeats += 1
+        else:
+            self._candidate = command
+            self._repeats = 1
+        if self._repeats >= self.required_repeats:
+            self.triggered = True
+            return command
+        return None
+
+    def reset(self) -> None:
+        self._candidate = None
+        self._repeats = 0
+        self.triggered = False
+
+
 class CommandParser:
     def __init__(
         self,
@@ -75,6 +105,7 @@ class SpeechRecognizer:
         parser: CommandParser,
         device: Optional[int] = None,
         sample_rate: int = 16000,
+        latency_mode: str = "balanced",
     ) -> None:
         path = Path(model_path)
         if not path.is_dir():
@@ -91,6 +122,8 @@ class SpeechRecognizer:
         self._parser = parser
         self._device = device
         self._sample_rate = sample_rate
+        repeats = {"fast": 1, "balanced": 2, "accurate": 0}[latency_mode]
+        self._partial_gate = PartialCommandGate(repeats)
         self._audio: queue.Queue[bytes | Exception] = queue.Queue(maxsize=20)
 
     def run(self, stop_event: Event, callback: Callable[[VoiceCommand], None]) -> None:
@@ -110,7 +143,7 @@ class SpeechRecognizer:
 
         with self._sd.RawInputStream(
             samplerate=self._sample_rate,
-            blocksize=4000,
+            blocksize=1600,
             device=self._device,
             dtype="int16",
             channels=1,
@@ -126,5 +159,13 @@ class SpeechRecognizer:
                 if self._recognizer.AcceptWaveform(data):
                     transcript = json.loads(self._recognizer.Result()).get("text", "")
                     command = self._parser.parse(transcript)
+                    if command and not self._partial_gate.triggered:
+                        callback(command)
+                    self._partial_gate.reset()
+                else:
+                    transcript = json.loads(self._recognizer.PartialResult()).get(
+                        "partial", ""
+                    )
+                    command = self._partial_gate.update(self._parser.parse(transcript))
                     if command:
                         callback(command)

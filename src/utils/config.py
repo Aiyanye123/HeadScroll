@@ -74,7 +74,8 @@ class VoiceConfig:
     model_path: Optional[str] = None
     device: Optional[int] = None
     sample_rate: int = 16000
-    cooldown_ms: float = 800
+    cooldown_ms: float = 550
+    latency_mode: str = "balanced"
     require_wake_word: bool = False
     wake_words: list[str] = field(default_factory=lambda: ["翻页"])
     previous_phrases: list[str] = field(
@@ -220,6 +221,8 @@ class Config:
             raise ValueError("camera dimensions and FPS must be positive")
         if voice.sample_rate <= 0 or voice.cooldown_ms < 0:
             raise ValueError("voice sample rate and cooldown are invalid")
+        if voice.latency_mode not in {"fast", "balanced", "accurate"}:
+            raise ValueError("voice latency mode is invalid")
         if voice.device is not None and voice.device < 0:
             raise ValueError("voice device index must be non-negative")
         phrase_groups = (
