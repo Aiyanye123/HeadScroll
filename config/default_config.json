@@ -1,24 +1,32 @@
 {
+  "mode": "voice",
   "camera": {
     "index": 0,
     "width": 640,
     "height": 480,
     "target_fps": 30
   },
-  "calibration": {
-    "r_top": 0.25,
-    "r_mid": 0.50,
-    "r_bottom": 0.75,
-    "method": "linear",
-    "mode": "head",
-    "head_pitch_min": -0.12,
-    "head_pitch_max": 0.12,
-    "head_pitch_center": 0.2,
-    "timestamp": null
+  "voice": {
+    "model_path": null,
+    "device": null,
+    "sample_rate": 16000,
+    "cooldown_ms": 550,
+    "latency_mode": "balanced",
+    "require_wake_word": false,
+    "wake_words": ["翻页"],
+    "previous_phrases": ["左", "左翻", "向左", "上一页", "往前"],
+    "next_phrases": ["右", "右翻", "向右", "下一页", "往后"],
+    "pause_phrases": ["暂停", "停止"],
+    "resume_phrases": ["继续", "开始"],
+    "previous_key": "Left",
+    "next_key": "Right"
   },
-  "fusion": {
-    "w_gaze": 0.8,
-    "w_pitch": 0.2
+  "calibration": {
+    "r_top": -0.12,
+    "r_mid": 0.0,
+    "r_bottom": 0.12,
+    "timestamp": null,
+    "pose_source": "matrix"
   },
   "filter": {
     "ema_alpha": 0.75,
@@ -44,15 +52,9 @@
   },
   "ui": {
     "always_on_top": true,
-    "show_overlay": false,
     "hotkeys": {
       "toggle_pause": "Ctrl+Shift+Space",
       "emergency_stop": "Escape"
     }
-  },
-  "injection": {
-    "target": "cursor",
-    "process_name": null,
-    "smooth_scroll": true
   }
 }

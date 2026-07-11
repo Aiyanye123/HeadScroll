@@ -1,134 +1,188 @@
-﻿"""
-M9: 设置对话框
-用于切换控制模式
-"""
+"""Settings for voice page turning and head scrolling."""
 
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit,
-    QKeySequenceEdit
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QKeySequenceEdit,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
 )
-from PySide6.QtCore import Qt
-from .process_picker_dialog import ProcessPickerDialog
-from .head_center_dialog import HeadCenterCalibrationDialog
 
 
 class SettingsDialog(QDialog):
-    """设置对话框"""
-
-    def __init__(self, config, host_window=None, parent=None):
+    def __init__(self, config, parent=None):
         super().__init__(parent)
         self._config = config
-        self._host_window = host_window
-        self.setWindowTitle("设置")
-        self.setModal(True)
-        self.setMinimumSize(420, 360)
-        self.resize(520, 420)
-
+        self.setWindowTitle("控制设置")
+        self.setMinimumSize(500, 580)
         layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        layout.setContentsMargins(16, 16, 16, 16)
+        form = QFormLayout()
 
-        title = QLabel("控制模式")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(title)
+        self.mode = QComboBox()
+        self.mode.addItem("语音左右翻页", "voice")
+        self.mode.addItem("抬头/低头上下滚动", "head")
+        form.addRow("控制模式:", self.mode)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("模式:"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("眼动(eye)", "eye")
-        self.mode_combo.addItem("抬头/低头(head)", "head")
-        row.addWidget(self.mode_combo)
-        layout.addLayout(row)
+        model_row = QHBoxLayout()
+        self.model_path = QLineEdit()
+        self.model_path.setPlaceholderText("留空使用内置中文模型")
+        pick = QPushButton("选择")
+        pick.clicked.connect(self._pick_model)
+        model_row.addWidget(self.model_path)
+        model_row.addWidget(pick)
+        form.addRow("语音模型目录:", model_row)
 
-        hint = QLabel("切换模式后请重新标定")
-        hint.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(hint)
+        self.device = QComboBox()
+        self.device.addItem("系统默认麦克风", None)
+        try:
+            import sounddevice as sd
 
-        self.auto_center_btn = QPushButton("自动校准中心")
-        self.auto_center_btn.clicked.connect(self._auto_calibrate_center)
-        layout.addWidget(self.auto_center_btn)
+            for index, info in enumerate(sd.query_devices()):
+                if info["max_input_channels"] > 0:
+                    self.device.addItem(f"{index}: {info['name']}", index)
+        except Exception:
+            pass
+        form.addRow("麦克风:", self.device)
+        self.require_wake = QCheckBox("必须先说唤醒词")
+        form.addRow("防误触:", self.require_wake)
+        self.latency_mode = QComboBox()
+        self.latency_mode.addItem("均衡（推荐）", "balanced")
+        self.latency_mode.addItem("快速", "fast")
+        self.latency_mode.addItem("准确", "accurate")
+        form.addRow("响应速度:", self.latency_mode)
+        self.wake_words = QLineEdit()
+        form.addRow("唤醒词:", self.wake_words)
+        self.previous_phrases = QLineEdit()
+        form.addRow("上一页指令:", self.previous_phrases)
+        self.next_phrases = QLineEdit()
+        form.addRow("下一页指令:", self.next_phrases)
+        self.pause_phrases = QLineEdit()
+        form.addRow("暂停指令:", self.pause_phrases)
+        self.resume_phrases = QLineEdit()
+        form.addRow("恢复指令:", self.resume_phrases)
+        self.cooldown = QSpinBox()
+        self.cooldown.setRange(200, 3000)
+        self.cooldown.setSuffix(" ms")
+        form.addRow("翻页冷却时间:", self.cooldown)
+        self.previous_key = self._key_combo()
+        self.next_key = self._key_combo()
+        form.addRow("上一页按键:", self.previous_key)
+        form.addRow("下一页按键:", self.next_key)
 
-        layout.addWidget(QLabel("快捷键"))
-        hotkey_row = QHBoxLayout()
-        hotkey_row.setSpacing(8)
-        hotkey_row.addWidget(QLabel("暂停/恢复:"))
-        self.pause_hotkey_edit = QKeySequenceEdit()
-        hotkey_row.addWidget(self.pause_hotkey_edit)
-        layout.addLayout(hotkey_row)
+        self.scroll_speed = QDoubleSpinBox()
+        self.scroll_speed.setRange(0.5, 10.0)
+        self.scroll_speed.setSingleStep(0.5)
+        form.addRow("头部最大滚动速度:", self.scroll_speed)
+        self.head_trigger = QDoubleSpinBox()
+        self.head_trigger.setRange(0.1, 0.9)
+        self.head_trigger.setSingleStep(0.05)
+        form.addRow("头部触发阈值:", self.head_trigger)
+        self.head_release = QDoubleSpinBox()
+        self.head_release.setRange(0.05, 0.85)
+        self.head_release.setSingleStep(0.05)
+        form.addRow("头部释放阈值:", self.head_release)
+        self.pause_hotkey = QKeySequenceEdit()
+        form.addRow("暂停/恢复快捷键:", self.pause_hotkey)
+        self.stop_hotkey = QKeySequenceEdit()
+        form.addRow("紧急停止快捷键:", self.stop_hotkey)
+        layout.addLayout(form)
 
-        layout.addWidget(QLabel("滚轮发送目标"))
-        target_row = QHBoxLayout()
-        target_row.setSpacing(8)
-        target_row.addWidget(QLabel("目标:"))
-        self.target_combo = QComboBox()
-        self.target_combo.addItem("鼠标所在窗口", "cursor")
-        self.target_combo.addItem("前台窗口", "foreground")
-        self.target_combo.addItem("指定进程", "process")
-        target_row.addWidget(self.target_combo)
-        layout.addLayout(target_row)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        self._load()
 
-        process_row = QHBoxLayout()
-        process_row.setSpacing(8)
-        process_row.addWidget(QLabel("进程名:"))
-        self.process_edit = QLineEdit()
-        self.process_edit.setPlaceholderText("例如 chrome.exe")
-        process_row.addWidget(self.process_edit)
-        self.pick_process_btn = QPushButton("选择")
-        self.pick_process_btn.clicked.connect(self._pick_process)
-        process_row.addWidget(self.pick_process_btn)
-        layout.addLayout(process_row)
+    @staticmethod
+    def _key_combo() -> QComboBox:
+        combo = QComboBox()
+        for label, value in (("← Left", "Left"), ("→ Right", "Right"),
+                             ("Page Up", "PageUp"), ("Page Down", "PageDown")):
+            combo.addItem(label, value)
+        return combo
 
-        layout.addStretch()
+    @staticmethod
+    def _select(combo: QComboBox, value: str) -> None:
+        combo.setCurrentIndex(max(0, combo.findData(value)))
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        self.save_btn = QPushButton("保存")
-        self.cancel_btn = QPushButton("取消")
-        self.save_btn.clicked.connect(self._on_save)
-        self.cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(self.save_btn)
-        btn_row.addWidget(self.cancel_btn)
-        layout.addLayout(btn_row)
+    @staticmethod
+    def _phrases(text: str) -> list[str]:
+        return [item.strip() for item in text.replace("，", ",").split(",") if item.strip()]
 
-        self._load_from_config()
+    def _pick_model(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "选择 Vosk 模型目录")
+        if path:
+            self.model_path.setText(path)
 
-    def _pick_process(self):
-        dialog = ProcessPickerDialog(self)
-        if dialog.exec() and dialog.selected_process:
-            self.process_edit.setText(dialog.selected_process)
+    def _load(self) -> None:
+        voice = self._config.voice
+        self._select(self.mode, self._config.mode)
+        self.model_path.setText(voice.model_path or "")
+        self._select(self.device, voice.device)
+        self.require_wake.setChecked(voice.require_wake_word)
+        self._select(self.latency_mode, voice.latency_mode)
+        for widget, values in (
+            (self.wake_words, voice.wake_words),
+            (self.previous_phrases, voice.previous_phrases),
+            (self.next_phrases, voice.next_phrases),
+            (self.pause_phrases, voice.pause_phrases),
+            (self.resume_phrases, voice.resume_phrases),
+        ):
+            widget.setText("，".join(values))
+        self.cooldown.setValue(int(voice.cooldown_ms))
+        self._select(self.previous_key, voice.previous_key)
+        self._select(self.next_key, voice.next_key)
+        self.scroll_speed.setValue(self._config.scroll.v_max)
+        self.head_trigger.setValue(self._config.thresholds.th_on)
+        self.head_release.setValue(self._config.thresholds.th_off)
+        self.pause_hotkey.setKeySequence(self._config.ui.hotkeys.toggle_pause)
+        self.stop_hotkey.setKeySequence(self._config.ui.hotkeys.emergency_stop)
 
-    def _auto_calibrate_center(self):
-        dialog = HeadCenterCalibrationDialog(self._config, self._host_window, self)
-        if dialog.exec():
-            self._load_from_config()
-
-    def _load_from_config(self):
-        mode = getattr(self._config.calibration, "mode", "eye")
-        index = 0 if mode != "head" else 1
-        self.mode_combo.setCurrentIndex(index)
-
-        pause_hotkey = getattr(self._config.ui.hotkeys, "toggle_pause", "Ctrl+Shift+Space")
-        self.pause_hotkey_edit.setKeySequence(pause_hotkey)
-
-        target = getattr(self._config.injection, "target", "cursor")
-        target_index = 0
-        if target == "foreground":
-            target_index = 1
-        elif target == "process":
-            target_index = 2
-        self.target_combo.setCurrentIndex(target_index)
-
-        process_name = getattr(self._config.injection, "process_name", "") or ""
-        self.process_edit.setText(process_name)
-
-    def _on_save(self):
-        mode = self.mode_combo.currentData()
-        self._config.calibration.mode = mode
-        self._config.ui.hotkeys.toggle_pause = self.pause_hotkey_edit.keySequence().toString()
-        self._config.injection.target = self.target_combo.currentData()
-        self._config.injection.process_name = self.process_edit.text().strip() or None
+    def _save(self) -> None:
+        groups = [self._phrases(widget.text()) for widget in (
+            self.previous_phrases, self.next_phrases, self.pause_phrases, self.resume_phrases
+        )]
+        if any(not group for group in groups):
+            QMessageBox.warning(self, "设置无效", "四组语音指令都不能为空")
+            return
+        if self.require_wake.isChecked() and not self._phrases(self.wake_words.text()):
+            QMessageBox.warning(self, "设置无效", "启用唤醒词后必须填写唤醒词")
+            return
+        if self.previous_key.currentData() == self.next_key.currentData():
+            QMessageBox.warning(self, "设置无效", "上一页和下一页按键不能相同")
+            return
+        if self.head_release.value() >= self.head_trigger.value():
+            QMessageBox.warning(self, "设置无效", "头部释放阈值必须小于触发阈值")
+            return
+        voice = self._config.voice
+        self._config.config.mode = self.mode.currentData()
+        voice.model_path = self.model_path.text().strip() or None
+        voice.device = self.device.currentData()
+        voice.require_wake_word = self.require_wake.isChecked()
+        voice.latency_mode = self.latency_mode.currentData()
+        voice.wake_words = self._phrases(self.wake_words.text())
+        (voice.previous_phrases, voice.next_phrases,
+         voice.pause_phrases, voice.resume_phrases) = groups
+        voice.cooldown_ms = self.cooldown.value()
+        voice.previous_key = self.previous_key.currentData()
+        voice.next_key = self.next_key.currentData()
+        self._config.scroll.v_max = self.scroll_speed.value()
+        self._config.thresholds.th_on = self.head_trigger.value()
+        self._config.thresholds.th_off = self.head_release.value()
+        self._config.ui.hotkeys.toggle_pause = self.pause_hotkey.keySequence().toString()
+        self._config.ui.hotkeys.emergency_stop = self.stop_hotkey.keySequence().toString()
         if not self._config.save():
-            self.reject()
+            QMessageBox.critical(self, "保存失败", "无法写入用户配置文件")
             return
         self.accept()

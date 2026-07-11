@@ -41,7 +41,7 @@ class Calibrator:
     
     # 采样参数
     SAMPLE_DURATION_SEC = 1.5    # 每个位置采样时长
-    DISCARD_DURATION_SEC = 0.3   # 丢弃前 N 秒（避免眼动过渡）
+    DISCARD_DURATION_SEC = 0.3   # 丢弃动作过渡阶段
     MIN_SAMPLES = 10             # 最小有效采样数
     MIN_RANGE = 0.05             # 最小有效范围（r_bottom - r_top）
     
@@ -142,7 +142,7 @@ class Calibrator:
             )
         
         # 检查范围是否足够
-        if r_bottom - r_top < self.MIN_RANGE:
+        if not self._anchors_valid(r_top, r_mid, r_bottom):
             return CalibrationResult(
                 r_top=r_top, r_mid=r_mid, r_bottom=r_bottom,
                 is_valid=False,
@@ -205,28 +205,29 @@ class Calibrator:
             # 未标定时使用默认线性映射
             return np.clip(gaze_y_raw, 0.0, 1.0)
         
-        # 分段线性映射
-        if gaze_y_raw <= self._r_mid:
-            # 上半段：[r_top, r_mid] -> [0, 0.5]
-            if self._r_mid - self._r_top < 0.001:
-                s = 0.25
-            else:
-                s = 0.5 * (gaze_y_raw - self._r_top) / (self._r_mid - self._r_top)
-        else:
-            # 下半段：[r_mid, r_bottom] -> [0.5, 1]
-            if self._r_bottom - self._r_mid < 0.001:
-                s = 0.75
-            else:
-                s = 0.5 + 0.5 * (gaze_y_raw - self._r_mid) / (self._r_bottom - self._r_mid)
-        
-        return float(np.clip(s, 0.0, 1.0))
+        anchors = sorted(
+            ((self._r_top, 0.0), (self._r_mid, 0.5), (self._r_bottom, 1.0)),
+            key=lambda item: item[0],
+        )
+        return float(np.interp(
+            gaze_y_raw,
+            [item[0] for item in anchors],
+            [item[1] for item in anchors],
+        ))
     
     def load_calibration(self, r_top: float, r_mid: float, r_bottom: float) -> None:
         """加载已保存的标定参数"""
+        if not self._anchors_valid(r_top, r_mid, r_bottom):
+            raise ValueError("标定点顺序或范围无效")
         self._r_top = r_top
         self._r_mid = r_mid
         self._r_bottom = r_bottom
         self._is_calibrated = True
+
+    @classmethod
+    def _anchors_valid(cls, r_top: float, r_mid: float, r_bottom: float) -> bool:
+        lower, upper = sorted((r_top, r_bottom))
+        return upper - lower >= cls.MIN_RANGE and lower < r_mid < upper
     
     def set_callbacks(
         self,

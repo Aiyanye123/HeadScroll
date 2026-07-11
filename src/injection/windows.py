@@ -14,6 +14,7 @@ from .base import InputInjector
 
 # Windows API 常量
 MOUSEEVENTF_WHEEL = 0x0800
+KEYEVENTF_KEYUP = 0x0002
 WM_MOUSEWHEEL = 0x020A
 WHEEL_DELTA = 120  # Windows 标准滚轮单位
 
@@ -21,6 +22,14 @@ WHEEL_DELTA = 120  # Windows 标准滚轮单位
 LRESULT = getattr(wintypes, "LRESULT", wintypes.LPARAM)
 
 INPUT_MOUSE = 0
+INPUT_KEYBOARD = 1
+
+VIRTUAL_KEYS = {
+    "Left": 0x25,
+    "Right": 0x27,
+    "PageUp": 0x21,
+    "PageDown": 0x22,
+}
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -35,11 +44,22 @@ class MOUSEINPUT(ctypes.Structure):
     ]
 
 
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+    ]
+
+
 class INPUT(ctypes.Structure):
     """输入结构"""
     class _INPUT_UNION(ctypes.Union):
         _fields_ = [
             ("mi", MOUSEINPUT),
+            ("ki", KEYBDINPUT),
         ]
     
     _anonymous_ = ("_input",)
@@ -168,17 +188,41 @@ class WindowsInjector(InputInjector):
                 for _ in range(abs(delta)):
                     wheel_delta = -WHEEL_DELTA if delta > 0 else WHEEL_DELTA
                     if not self._send_wheel_by_mode(wheel_delta):
-                        self._send_wheel_event(wheel_delta)
+                        if not self._send_wheel_event(wheel_delta):
+                            return False
             else:
                 # 一次性发送
                 wheel_delta = -delta * WHEEL_DELTA
                 if not self._send_wheel_by_mode(wheel_delta):
-                    self._send_wheel_event(wheel_delta)
+                    return self._send_wheel_event(wheel_delta)
             return True
-        except Exception:
+        except Exception as exc:
+            self._logger.error("Wheel injection failed: %s", exc)
             return False
+
+    def press_key(self, key: str) -> bool:
+        """向当前前台窗口发送一次翻页按键。"""
+        if not self._initialized or self._send_input is None:
+            return False
+        virtual_key = VIRTUAL_KEYS.get(key)
+        if virtual_key is None:
+            self._logger.error("Unsupported page key: %s", key)
+            return False
+
+        inputs = (INPUT * 2)()
+        inputs[0].type = INPUT_KEYBOARD
+        inputs[0].ki.wVk = virtual_key
+        inputs[1].type = INPUT_KEYBOARD
+        inputs[1].ki.wVk = virtual_key
+        inputs[1].ki.dwFlags = KEYEVENTF_KEYUP
+        sent = self._send_input(2, inputs, ctypes.sizeof(INPUT))
+        if sent != 2:
+            self._last_error = f"SendInput inserted {sent}/2 keyboard events"
+            self._logger.error(self._last_error)
+            return False
+        return True
     
-    def _send_wheel_event(self, wheel_delta: int) -> None:
+    def _send_wheel_event(self, wheel_delta: int) -> bool:
         """发送单次滚轮事件"""
         inp = INPUT()
         inp.type = INPUT_MOUSE
@@ -189,7 +233,8 @@ class WindowsInjector(InputInjector):
         inp.mi.time = 0
         inp.mi.dwExtraInfo = None
         
-        self._send_input(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        sent = self._send_input(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        return sent == 1
 
     def _send_wheel_by_mode(self, wheel_delta: int) -> bool:
         """按目标模式发送滚轮事件"""

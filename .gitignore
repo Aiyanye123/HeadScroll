@@ -11,12 +11,22 @@ venv/
 # PyInstaller
 build/
 dist/
+requirements-dev.txt
+
+# Local development checks and utilities
+tests/
+tools/
+
+# Local design notes
+/人脸控制网页漫画滚动设计文档.md
+/架构文档.md
 
 # User config
 config/config.json
 
 # Model assets (optional if too large)
 # assets/models/*.task
+assets/models/gesture_recognizer.task
 
 # OS
 .DS_Store

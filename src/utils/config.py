@@ -1,18 +1,17 @@
-"""
-M10: 配置管理模块
-配置加载保存
-"""
+"""Validated, atomic application configuration."""
 
 import json
+import logging
 import os
-from dataclasses import dataclass, field, asdict
-from typing import Optional, Dict, Any
+import sys
+import tempfile
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 @dataclass
 class CameraConfig:
-    """摄像头配置"""
     index: int = 0
     width: int = 640
     height: int = 480
@@ -21,169 +20,156 @@ class CameraConfig:
 
 @dataclass
 class CalibrationConfig:
-    """标定配置"""
-    r_top: float = 0.25
-    r_mid: float = 0.50
-    r_bottom: float = 0.75
-    method: str = "linear"
-    mode: str = "head"
-    head_pitch_min: float = -0.15
-    head_pitch_max: float = 0.15
-    head_pitch_center: float = 0.0
+    r_top: float = -0.12
+    r_mid: float = 0.0
+    r_bottom: float = 0.12
     timestamp: Optional[str] = None
-
-
-@dataclass
-class FusionConfig:
-    """融合配置"""
-    w_gaze: float = 0.8
-    w_pitch: float = 0.2
+    pose_source: str = "matrix"
 
 
 @dataclass
 class FilterConfig:
-    """滤波配置"""
-    ema_alpha: float = 0.85
-    confidence_min: float = 0.6
+    ema_alpha: float = 0.75
+    confidence_min: float = 0.4
     lost_face_timeout_ms: float = 500
 
 
 @dataclass
 class ThresholdsConfig:
-    """阈值配置"""
-    th_on: float = 0.78
-    th_off: float = 0.70
-    dwell_on_ms: float = 400
-    dwell_off_ms: float = 100
+    th_on: float = 0.45
+    th_off: float = 0.35
+    dwell_on_ms: float = 120
+    dwell_off_ms: float = 80
 
 
 @dataclass
 class ScrollConfig:
-    """滚动配置"""
-    v_max: float = 5.0
-    gamma: float = 1.5
-    a_up: float = 10.0
-    a_down: float = 20.0
-    tick_hz: float = 60
+    v_max: float = 3.0
+    gamma: float = 1.8
+    a_up: float = 8.0
+    a_down: float = 16.0
+    tick_hz: float = 90
 
 
 @dataclass
 class BlinkConfig:
-    """眨眼配置"""
-    long_blink_ms: float = 600
-    cooldown_ms: float = 1500
+    long_blink_ms: float = 900
+    cooldown_ms: float = 2000
 
 
 @dataclass
 class HotkeysConfig:
-    """快捷键配置"""
     toggle_pause: str = "Ctrl+Shift+Space"
     emergency_stop: str = "Escape"
 
 
 @dataclass
 class UIConfig:
-    """UI 配置"""
     always_on_top: bool = True
-    show_overlay: bool = False
     hotkeys: HotkeysConfig = field(default_factory=HotkeysConfig)
 
 
 @dataclass
-class InjectionConfig:
-    """输入注入配置"""
-    target: str = "cursor"  # cursor / foreground / process
-    process_name: Optional[str] = None
-    smooth_scroll: bool = True
+class VoiceConfig:
+    model_path: Optional[str] = None
+    device: Optional[int] = None
+    sample_rate: int = 16000
+    cooldown_ms: float = 550
+    latency_mode: str = "balanced"
+    require_wake_word: bool = False
+    wake_words: list[str] = field(default_factory=lambda: ["翻页"])
+    previous_phrases: list[str] = field(
+        default_factory=lambda: ["左", "左翻", "向左", "上一页", "往前"]
+    )
+    next_phrases: list[str] = field(
+        default_factory=lambda: ["右", "右翻", "向右", "下一页", "往后"]
+    )
+    pause_phrases: list[str] = field(default_factory=lambda: ["暂停", "停止"])
+    resume_phrases: list[str] = field(default_factory=lambda: ["继续", "开始"])
+    previous_key: str = "Left"
+    next_key: str = "Right"
 
 
 @dataclass
 class AppConfig:
-    """应用程序完整配置"""
+    mode: str = "voice"
     camera: CameraConfig = field(default_factory=CameraConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
-    fusion: FusionConfig = field(default_factory=FusionConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     scroll: ScrollConfig = field(default_factory=ScrollConfig)
     blink: BlinkConfig = field(default_factory=BlinkConfig)
     ui: UIConfig = field(default_factory=UIConfig)
-    injection: InjectionConfig = field(default_factory=InjectionConfig)
 
 
 class Config:
-    """配置管理器"""
-    
     DEFAULT_CONFIG_NAME = "default_config.json"
     USER_CONFIG_NAME = "config.json"
-    
+
     def __init__(self, app_dir: Optional[str] = None):
-        """
-        初始化配置管理器
-        
-        Args:
-            app_dir: 应用程序目录，None 则使用脚本所在目录
-        """
-        if app_dir is None:
-            # 默认使用项目根目录
-            app_dir = str(Path(__file__).parent.parent.parent)
-        
-        self.app_dir = Path(app_dir)
-        self.config_dir = self.app_dir / "config"
-        
+        if app_dir is not None:
+            self.app_dir = Path(app_dir)
+            self.config_dir = self.app_dir / "config"
+            self.default_config_path = self.config_dir / self.DEFAULT_CONFIG_NAME
+        elif getattr(sys, "frozen", False):
+            resource_root = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+            self.app_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "HeadScroll"
+            self.config_dir = self.app_dir
+            self.default_config_path = resource_root / "config" / self.DEFAULT_CONFIG_NAME
+        else:
+            self.app_dir = Path(__file__).resolve().parents[2]
+            self.config_dir = self.app_dir / "config"
+            self.default_config_path = self.config_dir / self.DEFAULT_CONFIG_NAME
         self._config = AppConfig()
         self._config_path: Optional[Path] = None
-    
+
     def load(self, config_path: Optional[str] = None) -> bool:
-        """
-        加载配置文件
-        
-        Args:
-            config_path: 配置文件路径，None 则依次尝试用户配置和默认配置
-            
-        Returns:
-            是否成功加载
-        """
         if config_path:
             return self._load_from_file(Path(config_path))
-        
-        # 尝试加载用户配置
         user_config = self.config_dir / self.USER_CONFIG_NAME
-        if user_config.exists():
-            if self._load_from_file(user_config):
-                return True
-        
-        # 尝试加载默认配置
-        default_config = self.config_dir / self.DEFAULT_CONFIG_NAME
-        if default_config.exists():
-            return self._load_from_file(default_config)
-        
-        # 使用默认值
-        self._config = AppConfig()
+        if user_config.exists() and self._load_from_file(user_config):
+            return True
+        if self.default_config_path.exists():
+            return self._load_from_file(self.default_config_path)
         return True
-    
+
     def _load_from_file(self, path: Path) -> bool:
-        """从文件加载配置"""
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            
-            self._config = self._dict_to_config(data)
+            with path.open("r", encoding="utf-8") as file:
+                config = self._dict_to_config(json.load(file))
+            self._validate(config)
+            self._config = config
             self._config_path = path
             return True
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("head_scroll.config").warning(
+                "Failed to load config %s: %s", path, exc
+            )
             return False
-    
-    def _dict_to_config(self, data: Dict[str, Any]) -> AppConfig:
-        """将字典转换为配置对象"""
+
+    @staticmethod
+    def _dict_to_config(data: Dict[str, Any]) -> AppConfig:
         config = AppConfig()
-        
+        legacy_calibration = data.get("calibration", {})
+        config.mode = data.get("mode") or (
+            "head" if legacy_calibration.get("mode") == "head" else "voice"
+        )
+        if config.mode == "hand":
+            config.mode = "voice"
         if "camera" in data:
             config.camera = CameraConfig(**data["camera"])
+        if "voice" in data:
+            config.voice = VoiceConfig(**data["voice"])
         if "calibration" in data:
-            config.calibration = CalibrationConfig(**data["calibration"])
-        if "fusion" in data:
-            config.fusion = FusionConfig(**data["fusion"])
+            calibration = data["calibration"]
+            config.calibration = CalibrationConfig(**{
+                name: calibration[name]
+                for name in ("r_top", "r_mid", "r_bottom", "timestamp", "pose_source")
+                if name in calibration
+            })
+            if calibration.get("pose_source") != "matrix":
+                config.calibration.timestamp = None
         if "filter" in data:
             config.filter = FilterConfig(**data["filter"])
         if "thresholds" in data:
@@ -193,112 +179,121 @@ class Config:
         if "blink" in data:
             config.blink = BlinkConfig(**data["blink"])
         if "ui" in data:
-            ui_data = data["ui"]
-            hotkeys = HotkeysConfig(**ui_data.get("hotkeys", {}))
+            ui = data["ui"]
             config.ui = UIConfig(
-                always_on_top=ui_data.get("always_on_top", True),
-                show_overlay=ui_data.get("show_overlay", False),
-                hotkeys=hotkeys
+                always_on_top=ui.get("always_on_top", True),
+                hotkeys=HotkeysConfig(**ui.get("hotkeys", {})),
             )
-        if "injection" in data:
-            config.injection = InjectionConfig(**data["injection"])
-        
         return config
-    
+
     def save(self, config_path: Optional[str] = None) -> bool:
-        """
-        保存配置文件
-        
-        Args:
-            config_path: 配置文件路径，None 则保存为用户配置
-            
-        Returns:
-            是否成功保存
-        """
-        if config_path:
-            path = Path(config_path)
-        else:
-            path = self.config_dir / self.USER_CONFIG_NAME
-        
+        path = Path(config_path) if config_path else self.config_dir / self.USER_CONFIG_NAME
         try:
-            # 确保目录存在
+            self._validate(self._config)
             path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # 转换为字典
-            data = self._config_to_dict(self._config)
-            
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            
+            fd, temp_name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as file:
+                    json.dump(asdict(self._config), file, indent=2, ensure_ascii=False)
+                    file.flush()
+                    os.fsync(file.fileno())
+                os.replace(temp_name, path)
+            except Exception:
+                if os.path.exists(temp_name):
+                    os.unlink(temp_name)
+                raise
             self._config_path = path
             return True
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("head_scroll.config").error(
+                "Failed to save config %s: %s", path, exc
+            )
             return False
-    
-    def _config_to_dict(self, config: AppConfig) -> Dict[str, Any]:
-        """将配置对象转换为字典"""
-        return {
-            "camera": asdict(config.camera),
-            "calibration": asdict(config.calibration),
-            "fusion": asdict(config.fusion),
-            "filter": asdict(config.filter),
-            "thresholds": asdict(config.thresholds),
-            "scroll": asdict(config.scroll),
-            "blink": asdict(config.blink),
-            "ui": {
-                "always_on_top": config.ui.always_on_top,
-                "show_overlay": config.ui.show_overlay,
-                "hotkeys": asdict(config.ui.hotkeys)
-            },
-            "injection": asdict(config.injection),
-        }
-    
-    def update_calibration(
-        self,
-        r_top: float,
-        r_mid: float,
-        r_bottom: float,
-        timestamp: str
-    ) -> None:
-        """更新标定参数"""
-        self._config.calibration.r_top = r_top
-        self._config.calibration.r_mid = r_mid
-        self._config.calibration.r_bottom = r_bottom
-        self._config.calibration.timestamp = timestamp
-    
+
+    @staticmethod
+    def _validate(config: AppConfig) -> None:
+        voice = config.voice
+        if config.mode not in {"voice", "head"}:
+            raise ValueError("mode must be voice or head")
+        if config.camera.index < 0:
+            raise ValueError("camera.index must be non-negative")
+        if min(config.camera.width, config.camera.height, config.camera.target_fps) <= 0:
+            raise ValueError("camera dimensions and FPS must be positive")
+        if voice.sample_rate <= 0 or voice.cooldown_ms < 0:
+            raise ValueError("voice sample rate and cooldown are invalid")
+        if voice.latency_mode not in {"fast", "balanced", "accurate"}:
+            raise ValueError("voice latency mode is invalid")
+        if voice.device is not None and voice.device < 0:
+            raise ValueError("voice device index must be non-negative")
+        phrase_groups = (
+            voice.previous_phrases,
+            voice.next_phrases,
+            voice.pause_phrases,
+            voice.resume_phrases,
+        )
+        if any(not group or any(not phrase.strip() for phrase in group) for group in phrase_groups):
+            raise ValueError("voice command phrase groups cannot be empty")
+        flattened = [phrase.strip() for group in phrase_groups for phrase in group]
+        if len(flattened) != len(set(flattened)):
+            raise ValueError("voice command phrases must be unique across actions")
+        if voice.require_wake_word and not any(word.strip() for word in voice.wake_words):
+            raise ValueError("wake word is required but none is configured")
+        supported_keys = {"Left", "Right", "PageUp", "PageDown"}
+        if voice.previous_key not in supported_keys or voice.next_key not in supported_keys:
+            raise ValueError("unsupported page key")
+        if voice.previous_key == voice.next_key:
+            raise ValueError("previous and next page keys must differ")
+        if not config.ui.hotkeys.toggle_pause or not config.ui.hotkeys.emergency_stop:
+            raise ValueError("hotkeys cannot be empty")
+        if voice.model_path and not Path(voice.model_path).is_dir():
+            raise ValueError("voice.model_path must point to a model directory")
+        if not 0.0 < config.filter.ema_alpha < 1.0:
+            raise ValueError("filter.ema_alpha must be between 0 and 1")
+        if not 0.0 <= config.filter.confidence_min <= 1.0:
+            raise ValueError("filter.confidence_min must be between 0 and 1")
+        if not 0.0 <= config.thresholds.th_off < config.thresholds.th_on <= 1.0:
+            raise ValueError("head scroll thresholds are invalid")
+        if min(config.scroll.v_max, config.scroll.gamma, config.scroll.tick_hz) <= 0:
+            raise ValueError("scroll speed, gamma, and tick rate must be positive")
+        if config.calibration.pose_source != "matrix":
+            raise ValueError("unsupported head pose source")
+
     @property
     def config(self) -> AppConfig:
-        """获取配置对象"""
         return self._config
-    
+
     @property
     def camera(self) -> CameraConfig:
         return self._config.camera
-    
+
+    @property
+    def voice(self) -> VoiceConfig:
+        return self._config.voice
+
+    @property
+    def mode(self) -> str:
+        return self._config.mode
+
     @property
     def calibration(self) -> CalibrationConfig:
         return self._config.calibration
-    
+
     @property
     def filter(self) -> FilterConfig:
         return self._config.filter
-    
+
     @property
     def thresholds(self) -> ThresholdsConfig:
         return self._config.thresholds
-    
+
     @property
     def scroll(self) -> ScrollConfig:
         return self._config.scroll
-    
+
     @property
     def blink(self) -> BlinkConfig:
         return self._config.blink
-    
+
     @property
     def ui(self) -> UIConfig:
         return self._config.ui
-
-    @property
-    def injection(self) -> InjectionConfig:
-        return self._config.injection

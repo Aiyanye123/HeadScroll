@@ -80,6 +80,7 @@ class CalibrationWizard(QDialog):
         self._sample_timer.timeout.connect(self._on_sample_timeout)
         
         self._on_sample_callback = None
+        self._flow_finished = False
         
         self._setup_ui()
     
@@ -89,14 +90,14 @@ class CalibrationWizard(QDialog):
         layout.setSpacing(20)
         
         # 标题
-        title = QLabel("三点标定")
+        title = QLabel("头部三点标定")
         title.setFont(QFont("", 16, QFont.Weight.Bold))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
         
         # 说明
         self.instruction = QLabel(
-            "请按照提示注视屏幕的上方、中部和下方位置。\n"
+            "请按照提示依次抬头、保持自然姿势、低头。\n"
             "每个位置需要保持 1.5 秒。"
         )
         self.instruction.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -114,7 +115,7 @@ class CalibrationWizard(QDialog):
         layout.addLayout(indicator_layout)
         
         # 步骤提示
-        self.step_label = QLabel("步骤 1/3: 请注视屏幕上方")
+        self.step_label = QLabel("步骤 1/3: 请抬头")
         self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.step_label.setFont(QFont("", 12))
         layout.addWidget(self.step_label)
@@ -147,18 +148,31 @@ class CalibrationWizard(QDialog):
     
     def _start_calibration(self):
         """开始标定"""
+        self._flow_finished = False
         self._current_step = 0
         self._samples = {"top": [], "mid": [], "bottom": []}
         
         self.start_btn.setEnabled(False)
         self._start_step()
+
+    def prepare(self):
+        """Reset reusable dialog state before a new calibration session."""
+        self._sample_timer.stop()
+        self._flow_finished = False
+        self._current_step = 0
+        self._samples = {"top": [], "mid": [], "bottom": []}
+        self.start_btn.setEnabled(True)
+        self.progress.setValue(0)
+        self.status_label.setText("点击开始按钮开始标定")
+        self.step_label.setText("步骤 1/3: 请抬头")
+        self.indicator.set_target(0.5, False)
     
     def _start_step(self):
         """开始当前步骤"""
         steps = [
-            ("top", 0.15, "步骤 1/3: 请注视屏幕上方"),
-            ("mid", 0.5, "步骤 2/3: 请注视屏幕中部"),
-            ("bottom", 0.85, "步骤 3/3: 请注视屏幕下方"),
+            ("top", 0.15, "步骤 1/3: 请抬头"),
+            ("mid", 0.5, "步骤 2/3: 请保持自然姿势"),
+            ("bottom", 0.85, "步骤 3/3: 请低头"),
         ]
         
         if self._current_step >= len(steps):
@@ -228,8 +242,9 @@ class CalibrationWizard(QDialog):
             self.start_btn.setEnabled(True)
             return
         
-        if r_bottom - r_top < 0.05:
-            self.status_label.setText("标定失败：范围过小，请调整坐姿")
+        lower, upper = sorted((r_top, r_bottom))
+        if upper - lower < 0.05 or not lower < r_mid < upper:
+            self.status_label.setText("标定失败：动作范围过小或中点无效")
             self.start_btn.setEnabled(True)
             return
         
@@ -237,11 +252,21 @@ class CalibrationWizard(QDialog):
         self.step_label.setText(f"参考值: 上={r_top:.2f}, 中={r_mid:.2f}, 下={r_bottom:.2f}")
         
         self.calibration_complete.emit(r_top, r_mid, r_bottom)
+        self._flow_finished = True
         
         QTimer.singleShot(1500, self.accept)
     
     def _cancel(self):
         """取消标定"""
         self._sample_timer.stop()
-        self.calibration_cancelled.emit()
+        if not self._flow_finished:
+            self._flow_finished = True
+            self.calibration_cancelled.emit()
         self.reject()
+
+    def reject(self):
+        self._sample_timer.stop()
+        if not self._flow_finished:
+            self._flow_finished = True
+            self.calibration_cancelled.emit()
+        super().reject()

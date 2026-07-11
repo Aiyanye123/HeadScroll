@@ -1,9 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
+from PyInstaller.utils.hooks import collect_dynamic_libs
 
 datas = [
     ('../config', 'config'),
     ('../assets/models/face_landmarker.task', 'assets/models'),
+    ('../assets/models/vosk-model-small-cn-0.22', 'assets/models/vosk-model-small-cn-0.22'),
 ]
 binaries = []
 hiddenimports = [
@@ -14,9 +15,11 @@ hiddenimports = [
     'mediapipe.tasks.python.vision',
     'mediapipe.tasks.python.vision.core',
     'mediapipe.tasks.python.vision.face_landmarker',
+    'vosk',
+    'sounddevice',
 ]
 binaries += collect_dynamic_libs('mediapipe')
-hiddenimports += collect_submodules('mediapipe.tasks')
+binaries += collect_dynamic_libs('vosk')
 
 
 import os
@@ -52,7 +55,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='EyeScroll',
+    name='HeadScroll',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -72,5 +75,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='EyeScroll',
+    name='HeadScroll',
 )

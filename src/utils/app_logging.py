@@ -4,6 +4,7 @@ M10: 日志模块
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -29,7 +30,7 @@ def setup_logging(
         console: 是否输出到控制台
     """
     # 获取根 logger
-    root_logger = logging.getLogger("eye_scroll")
+    root_logger = logging.getLogger("head_scroll")
     root_logger.setLevel(level)
     
     # 清除已有处理器
@@ -49,7 +50,12 @@ def setup_logging(
         log_path = Path(log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
         
-        file_handler = logging.FileHandler(log_file, encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            log_file,
+            maxBytes=2 * 1024 * 1024,
+            backupCount=3,
+            encoding="utf-8",
+        )
         file_handler.setLevel(level)
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
@@ -65,7 +71,7 @@ def get_logger(name: str) -> logging.Logger:
     Returns:
         Logger 实例
     """
-    return logging.getLogger(f"eye_scroll.{name}")
+    return logging.getLogger(f"head_scroll.{name}")
 
 
 class EventLogger:
