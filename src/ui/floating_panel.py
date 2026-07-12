@@ -1,6 +1,7 @@
 """Compact voice page-turn and head-scroll panel."""
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QTimer, Qt, Signal
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
@@ -22,16 +23,44 @@ class FloatingPanel(QWidget):
     calibrate_clicked = Signal()
     settings_clicked = Signal()
     sensitivity_changed = Signal(int)
+    compact_requested = Signal()
 
     def __init__(self, always_on_top: bool = True):
         super().__init__()
+        self._compact_switch_pending = False
         self._setup_ui()
         self.setWindowTitle("HeadScroll 控制")
         flags = Qt.WindowType.Window
         if always_on_top:
             flags |= Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags | Qt.WindowType.WindowCloseButtonHint)
+        flags |= Qt.WindowType.WindowMinimizeButtonHint
+        flags |= Qt.WindowType.WindowCloseButtonHint
+        self.setWindowFlags(flags)
         self.setFixedWidth(320)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        event.ignore()
+        self.hide()
+        self.compact_requested.emit()
+
+    def changeEvent(self, event: QEvent) -> None:
+        super().changeEvent(event)
+        if (
+            event.type() == QEvent.Type.WindowStateChange
+            and self.isMinimized()
+            and not self._compact_switch_pending
+        ):
+            self._compact_switch_pending = True
+            QTimer.singleShot(0, self._switch_to_compact)
+
+    def _switch_to_compact(self) -> None:
+        if not self.isVisible():
+            self._compact_switch_pending = False
+            return
+        self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
+        self.hide()
+        self._compact_switch_pending = False
+        self.compact_requested.emit()
 
     def _setup_ui(self) -> None:
         layout = QVBoxLayout(self)

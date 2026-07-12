@@ -44,10 +44,43 @@ a = Analysis(
         'pandas',
         'scipy',
         'sklearn',
+        # Optional notebook, image, TLS, and Qt modules pulled in by dependency
+        # hooks. HeadScroll uses local models and Qt Core/Gui/Widgets only.
+        'IPython',
+        'jedi',
+        'traitlets',
+        'PIL',
+        'cryptography',
+        'PySide6.QtPdf',
+        'PySide6.QtPdfWidgets',
+        'PySide6.QtQml',
+        'PySide6.QtQuick',
+        'PySide6.QtQuickControls2',
+        'PySide6.QtQuickWidgets',
+        'PySide6.QtNetwork',
     ],
     noarchive=False,
     optimize=0,
 )
+
+# Some third-party hooks add native binaries and package data even when their
+# Python modules are excluded above. Remove only trees and Qt libraries that
+# HeadScroll never imports; keep camera, MediaPipe, Vosk, and widget runtime data.
+unused_prefixes = (
+    'PIL\\',
+    'cryptography\\',
+    'IPython\\',
+    'jedi\\',
+    'traitlets\\',
+    'PySide6\\Qt6Pdf',
+    'PySide6\\Qt6Qml',
+    'PySide6\\Qt6Quick',
+    'PySide6\\Qt6Network',
+    'PySide6\\opengl32sw.dll',
+    'PySide6\\plugins\\tls\\',
+)
+a.binaries = [item for item in a.binaries if not item[0].startswith(unused_prefixes)]
+a.datas = [item for item in a.datas if not item[0].startswith(unused_prefixes)]
 pyz = PYZ(a.pure)
 
 exe = EXE(

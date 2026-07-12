@@ -8,6 +8,7 @@ from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from .floating_panel import FloatingPanel
+from .compact_status import CompactStatusWindow
 from .calibration_wizard import CalibrationWizard
 from .global_hotkeys import GlobalHotkeys
 from .tray_icon import TrayIcon
@@ -32,6 +33,7 @@ class MainWindow(QMainWindow):
     ) -> None:
         super().__init__()
         self.panel = FloatingPanel(always_on_top)
+        self.compact_status = CompactStatusWindow(always_on_top)
         self.tray = TrayIcon(self)
         self.calibration_wizard = CalibrationWizard(self.panel)
         self.calibration_wizard.calibration_complete.connect(
@@ -64,6 +66,8 @@ class MainWindow(QMainWindow):
         self.panel.calibrate_clicked.connect(self._show_calibration)
         self.panel.settings_clicked.connect(self.settings_requested.emit)
         self.panel.sensitivity_changed.connect(self.sensitivity_changed.emit)
+        self.panel.compact_requested.connect(self._show_compact_status)
+        self.compact_status.restore_requested.connect(self._show_panel)
         self.tray.show_panel_clicked.connect(self._show_panel)
         self.tray.start_clicked.connect(self.start_requested.emit)
         self.tray.stop_clicked.connect(self.stop_requested.emit)
@@ -92,9 +96,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self.panel, "快捷键冲突", str(exc))
 
     def _show_panel(self) -> None:
+        self.compact_status.hide()
         self.panel.show()
         self.panel.raise_()
         self.panel.activateWindow()
+
+    def _show_compact_status(self) -> None:
+        self.compact_status.show()
+        self.compact_status.raise_()
+        self.compact_status.activateWindow()
 
     def _show_calibration(self) -> None:
         self.calibration_wizard.prepare()
@@ -131,27 +141,34 @@ class MainWindow(QMainWindow):
 
     def set_mode(self, mode: str) -> None:
         self.panel.set_mode(mode)
+        self.compact_status.set_mode(mode)
 
     def update_palm(self, palm_x: float | None) -> None:
         self.panel.update_palm(palm_x)
 
     def update_last_action(self, action: str) -> None:
         self.panel.update_last_action(action)
+        self.compact_status.update_last_action(action)
 
     def update_fps(self, fps: float) -> None:
         self.panel.update_fps(fps)
+        self.compact_status.update_fps(fps)
 
     def update_detection(self, present: bool, label: str, confidence: float) -> None:
         self.panel.update_detection(present, label, confidence)
+        self.compact_status.update_detection(present, label, confidence)
 
     def update_position(self, position: float | None) -> None:
         self.panel.update_position(position)
+        self.compact_status.update_position(position)
 
     def update_control_state(self, state: str) -> None:
         self.panel.update_control_state(state)
+        self.compact_status.update_control_state(state)
 
     def update_transcript(self, transcript: str) -> None:
         self.panel.update_transcript(transcript)
+        self.compact_status.update_transcript(transcript)
 
     def update_calibration_value(self, position: float, raw_value: float) -> None:
         if self.calibration_wizard.isVisible():
