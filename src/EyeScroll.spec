@@ -40,16 +40,14 @@ a = Analysis(
         'torch',
         'torchaudio',
         'torchvision',
-        'matplotlib',
         'pandas',
         'scipy',
         'sklearn',
-        # Optional notebook, image, TLS, and Qt modules pulled in by dependency
+        # Optional notebook, TLS, and Qt modules pulled in by dependency
         # hooks. HeadScroll uses local models and Qt Core/Gui/Widgets only.
         'IPython',
         'jedi',
         'traitlets',
-        'PIL',
         'cryptography',
         'PySide6.QtPdf',
         'PySide6.QtPdfWidgets',
@@ -67,7 +65,6 @@ a = Analysis(
 # Python modules are excluded above. Remove only trees and Qt libraries that
 # HeadScroll never imports; keep camera, MediaPipe, Vosk, and widget runtime data.
 unused_prefixes = (
-    'PIL\\',
     'cryptography\\',
     'IPython\\',
     'jedi\\',
