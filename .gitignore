@@ -15,6 +15,10 @@ dist/
 # User config
 config/config.json
 
+# Local documents
+/人脸控制网页漫画滚动设计文档.md
+/架构文档.md
+
 # Model assets (optional if too large)
 # assets/models/*.task
 
