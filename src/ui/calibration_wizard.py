@@ -4,6 +4,8 @@ M9: 标定向导界面
 """
 
 from typing import Optional
+import math
+import time
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -13,6 +15,7 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QPainter, QColor, QPen
 
 from .styles import COLORS
+from calibration import Calibrator
 
 
 class GazeIndicator(QFrame):
@@ -78,6 +81,12 @@ class CalibrationWizard(QDialog):
         self._samples = {"top": [], "mid": [], "bottom": []}
         self._sample_timer = QTimer(self)
         self._sample_timer.timeout.connect(self._on_sample_timeout)
+        self._step_timer = QTimer(self)
+        self._step_timer.setSingleShot(True)
+        self._step_timer.timeout.connect(self._start_step)
+        self._finish_timer = QTimer(self)
+        self._finish_timer.setSingleShot(True)
+        self._finish_timer.timeout.connect(self.accept)
         
         self._on_sample_callback = None
         self._flow_finished = False
@@ -158,6 +167,8 @@ class CalibrationWizard(QDialog):
     def prepare(self):
         """Reset reusable dialog state before a new calibration session."""
         self._sample_timer.stop()
+        self._step_timer.stop()
+        self._finish_timer.stop()
         self._flow_finished = False
         self._current_step = 0
         self._samples = {"top": [], "mid": [], "bottom": []}
@@ -184,38 +195,55 @@ class CalibrationWizard(QDialog):
         self.step_label.setText(label)
         self.indicator.set_target(target_pos, True)
         self.progress.setValue(0)
-        self.status_label.setText("请保持注视...")
+        self.status_label.setText("请保持姿势...")
         
         # 开始采样计时
-        self._sample_start_time = 0
+        self._sample_started_at = time.perf_counter()
+        self._last_sample_timestamp = self._sample_started_at
         self._current_key = key
         self._sample_timer.start(50)  # 50ms 采样间隔
     
     def _on_sample_timeout(self):
         """采样定时器回调"""
-        self._sample_start_time += 50
+        elapsed_ms = (time.perf_counter() - self._sample_started_at) * 1000
         
         # 更新进度
-        progress = min(100, int(self._sample_start_time / 1500 * 100))
+        progress = min(100, int(elapsed_ms / 1500 * 100))
         self.progress.setValue(progress)
         
         # 采样完成
-        if self._sample_start_time >= 1500:
+        if elapsed_ms >= 1500:
             self._sample_timer.stop()
             self._current_step += 1
             
             # 短暂延迟后进入下一步
-            QTimer.singleShot(300, self._start_step)
+            self._step_timer.start(300)
     
-    def update_gaze(self, gaze_y: float, sample_value: Optional[float] = None):
-        """更新注视位置（由外部调用）"""
-        self.indicator.set_position(gaze_y)
+    def update_position(
+        self,
+        position: Optional[float],
+        sample_value: Optional[float] = None,
+        timestamp: Optional[float] = None,
+    ):
+        """Only fresh valid head frames from the active sample interval count."""
+        if (
+            position is None or sample_value is None or timestamp is None
+            or not all(math.isfinite(value) for value in (position, sample_value, timestamp))
+        ):
+            if self._sample_timer.isActive():
+                self.status_label.setText("未检测到有效头部姿态")
+            return
+        self.indicator.set_position(position)
         
         # 添加采样（丢弃前 300ms）
-        if hasattr(self, '_current_key') and self._sample_start_time >= 300:
-            self._samples[self._current_key].append(
-                gaze_y if sample_value is None else sample_value
-            )
+        if (
+            self._sample_timer.isActive()
+            and timestamp > self._last_sample_timestamp
+            and 0.3 <= timestamp - self._sample_started_at <= 1.5
+        ):
+            self._last_sample_timestamp = timestamp
+            self.status_label.setText("请保持姿势...")
+            self._samples[self._current_key].append(sample_value)
     
     def _finish_calibration(self):
         """完成标定"""
@@ -242,9 +270,9 @@ class CalibrationWizard(QDialog):
             self.start_btn.setEnabled(True)
             return
         
-        lower, upper = sorted((r_top, r_bottom))
-        if upper - lower < 0.05 or not lower < r_mid < upper:
-            self.status_label.setText("标定失败：动作范围过小或中点无效")
+        error = Calibrator.head_reference_error(r_top, r_mid, r_bottom)
+        if error:
+            self.status_label.setText(f"标定失败：{error}")
             self.start_btn.setEnabled(True)
             return
         
@@ -254,7 +282,7 @@ class CalibrationWizard(QDialog):
         self.calibration_complete.emit(r_top, r_mid, r_bottom)
         self._flow_finished = True
         
-        QTimer.singleShot(1500, self.accept)
+        self._finish_timer.start(1500)
     
     def _cancel(self):
         """取消标定"""
@@ -265,8 +293,13 @@ class CalibrationWizard(QDialog):
         self.reject()
 
     def reject(self):
+        self.done(QDialog.DialogCode.Rejected)
+
+    def done(self, result):
         self._sample_timer.stop()
+        self._step_timer.stop()
+        self._finish_timer.stop()
         if not self._flow_finished:
             self._flow_finished = True
             self.calibration_cancelled.emit()
-        super().reject()
+        super().done(result)

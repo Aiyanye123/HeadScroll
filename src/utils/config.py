@@ -25,6 +25,7 @@ class CalibrationConfig:
     r_bottom: float = 0.12
     timestamp: Optional[str] = None
     pose_source: str = "matrix"
+    reference_algorithm: Optional[str] = None
 
 
 @dataclass
@@ -70,6 +71,13 @@ class UIConfig:
 
 
 @dataclass
+class InjectionConfig:
+    smooth_scroll: bool = True
+    target: str = "cursor"
+    process_name: Optional[str] = None
+
+
+@dataclass
 class VoiceConfig:
     model_path: Optional[str] = None
     device: Optional[int] = None
@@ -101,6 +109,7 @@ class AppConfig:
     scroll: ScrollConfig = field(default_factory=ScrollConfig)
     blink: BlinkConfig = field(default_factory=BlinkConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    injection: InjectionConfig = field(default_factory=InjectionConfig)
 
 
 class Config:
@@ -165,11 +174,12 @@ class Config:
             calibration = data["calibration"]
             config.calibration = CalibrationConfig(**{
                 name: calibration[name]
-                for name in ("r_top", "r_mid", "r_bottom", "timestamp", "pose_source")
+                for name in (
+                    "r_top", "r_mid", "r_bottom", "timestamp", "pose_source",
+                    "reference_algorithm",
+                )
                 if name in calibration
             })
-            if calibration.get("pose_source") != "matrix":
-                config.calibration.timestamp = None
         if "filter" in data:
             config.filter = FilterConfig(**data["filter"])
         if "thresholds" in data:
@@ -184,7 +194,17 @@ class Config:
                 always_on_top=ui.get("always_on_top", True),
                 hotkeys=HotkeysConfig(**ui.get("hotkeys", {})),
             )
+        if "injection" in data:
+            config.injection = InjectionConfig(**data["injection"])
         return config
+
+    def apply_settings(self, config: AppConfig) -> bool:
+        previous = self._config
+        self._config = config
+        if self.save():
+            return True
+        self._config = previous
+        return False
 
     def save(self, config_path: Optional[str] = None) -> bool:
         path = Path(config_path) if config_path else self.config_dir / self.USER_CONFIG_NAME
@@ -255,8 +275,14 @@ class Config:
             raise ValueError("head scroll thresholds are invalid")
         if min(config.scroll.v_max, config.scroll.gamma, config.scroll.tick_hz) <= 0:
             raise ValueError("scroll speed, gamma, and tick rate must be positive")
-        if config.calibration.pose_source != "matrix":
+        if config.calibration.pose_source not in {"matrix", "landmarks"}:
             raise ValueError("unsupported head pose source")
+        if config.injection.target not in {"cursor", "foreground", "process"}:
+            raise ValueError("unsupported scroll target")
+        if config.injection.target == "process" and not (
+            config.injection.process_name and config.injection.process_name.strip()
+        ):
+            raise ValueError("process target requires a process name")
 
     @property
     def config(self) -> AppConfig:
@@ -297,3 +323,7 @@ class Config:
     @property
     def ui(self) -> UIConfig:
         return self._config.ui
+
+    @property
+    def injection(self) -> InjectionConfig:
+        return self._config.injection

@@ -1,10 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_dynamic_libs
+import os
+import sys
+
+_spec_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 datas = [
-    ('../config', 'config'),
-    ('../assets/models/face_landmarker.task', 'assets/models'),
-    ('../assets/models/vosk-model-small-cn-0.22', 'assets/models/vosk-model-small-cn-0.22'),
+    (os.path.join(_spec_dir, '..', 'config', 'default_config.json'), 'config'),
+    (os.path.join(_spec_dir, '..', 'assets', 'models', 'face_landmarker.task'), 'assets/models'),
+    (os.path.join(_spec_dir, '..', 'assets', 'models', 'vosk-model-small-cn-0.22'),
+     'assets/models/vosk-model-small-cn-0.22'),
 ]
 binaries = []
 hiddenimports = [
@@ -21,11 +26,6 @@ hiddenimports = [
 binaries += collect_dynamic_libs('mediapipe')
 binaries += collect_dynamic_libs('vosk')
 
-
-import os
-import sys
-
-_spec_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 a = Analysis(
     [os.path.join(_spec_dir, 'main.py')],
@@ -81,6 +81,11 @@ unused_prefixes = (
 )
 a.binaries = [item for item in a.binaries if not item[0].startswith(unused_prefixes)]
 a.datas = [item for item in a.datas if not item[0].startswith(unused_prefixes)]
+# Qt6Widgets does not need ICU DLLs discovered from another application's PATH.
+a.binaries = [
+    item for item in a.binaries
+    if not os.path.basename(item[0]).casefold().startswith('icu')
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

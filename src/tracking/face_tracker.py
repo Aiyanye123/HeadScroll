@@ -21,6 +21,10 @@ MODEL_URL = (
     "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 )
 
+HEAD_POSE_MATRIX_ALGORITHM = "face_matrix_pitch_v1"
+HEAD_POSE_LEGACY_ALGORITHM = "face_landmark_pitch_v1"
+HEAD_POSE_UNAVAILABLE = "unavailable"
+
 
 @dataclass
 class FaceLandmarks:
@@ -31,6 +35,7 @@ class FaceLandmarks:
     image_width: int
     image_height: int
     transformation_matrix: Optional[np.ndarray] = None
+    head_pose_algorithm: str = HEAD_POSE_LEGACY_ALGORITHM
     
     def get_point(self, index: int) -> np.ndarray:
         """获取指定索引的关键点坐标 (x, y, z)"""
@@ -111,6 +116,12 @@ class FaceTracker:
                 min_tracking_confidence=min_tracking_confidence,
             )
     
+    @property
+    def head_pose_algorithm(self) -> str:
+        if self._use_tasks:
+            return HEAD_POSE_MATRIX_ALGORITHM
+        return HEAD_POSE_LEGACY_ALGORITHM
+
     def _init_solutions_face_mesh(
         self,
         max_num_faces: int,
@@ -249,6 +260,7 @@ class FaceTracker:
             image_width=w,
             image_height=h,
             transformation_matrix=transformation_matrix,
+            head_pose_algorithm=self.head_pose_algorithm,
         )
     
     def close(self) -> None:

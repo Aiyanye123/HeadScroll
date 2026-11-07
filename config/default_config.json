@@ -26,7 +26,8 @@
     "r_mid": 0.0,
     "r_bottom": 0.12,
     "timestamp": null,
-    "pose_source": "matrix"
+    "pose_source": "matrix",
+    "reference_algorithm": null
   },
   "filter": {
     "ema_alpha": 0.75,
@@ -49,6 +50,11 @@
   "blink": {
     "long_blink_ms": 900,
     "cooldown_ms": 2000
+  },
+  "injection": {
+    "smooth_scroll": true,
+    "target": "cursor",
+    "process_name": null
   },
   "ui": {
     "always_on_top": true,

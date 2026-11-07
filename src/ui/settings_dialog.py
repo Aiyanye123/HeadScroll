@@ -1,5 +1,7 @@
 """Settings for voice page turning and head scrolling."""
 
+from copy import deepcopy
+
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,14 +16,22 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QScrollArea,
     QVBoxLayout,
+    QWidget,
 )
+
+from .head_center_dialog import HeadCenterCalibrationDialog
+from .process_picker_dialog import ProcessPickerDialog
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config, parent=None):
+    def __init__(self, config, parent=None, *, host_window=None, camera_running=False):
         super().__init__(parent)
         self._config = config
+        self._host_window = host_window
+        self._camera_running = camera_running
+        self.head_reference = None
         self.setWindowTitle("控制设置")
         self.setMinimumSize(500, 580)
         layout = QVBoxLayout(self)
@@ -90,11 +100,34 @@ class SettingsDialog(QDialog):
         self.head_release.setRange(0.05, 0.85)
         self.head_release.setSingleStep(0.05)
         form.addRow("头部释放阈值:", self.head_release)
+        self.head_range = QPushButton("校准头部范围")
+        self.head_range.clicked.connect(self._calibrate_head_range)
+        form.addRow("头部范围:", self.head_range)
+        self.smooth_scroll = QCheckBox("使用亚刻度平滑滚动")
+        form.addRow("滚动方式:", self.smooth_scroll)
+        self.scroll_target = QComboBox()
+        self.scroll_target.addItem("鼠标所在窗口", "cursor")
+        self.scroll_target.addItem("前台窗口", "foreground")
+        self.scroll_target.addItem("指定进程", "process")
+        form.addRow("滚轮发送目标:", self.scroll_target)
+        process_row = QHBoxLayout()
+        self.process_name = QLineEdit()
+        self.process_name.setPlaceholderText("例如 chrome.exe")
+        process_pick = QPushButton("选择")
+        process_pick.clicked.connect(self._pick_process)
+        process_row.addWidget(self.process_name)
+        process_row.addWidget(process_pick)
+        form.addRow("目标进程:", process_row)
         self.pause_hotkey = QKeySequenceEdit()
         form.addRow("暂停/恢复快捷键:", self.pause_hotkey)
         self.stop_hotkey = QKeySequenceEdit()
         form.addRow("紧急停止快捷键:", self.stop_hotkey)
-        layout.addLayout(form)
+        form_widget = QWidget()
+        form_widget.setLayout(form)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form_widget)
+        layout.addWidget(scroll)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
@@ -125,6 +158,22 @@ class SettingsDialog(QDialog):
         if path:
             self.model_path.setText(path)
 
+    def _pick_process(self) -> None:
+        dialog = ProcessPickerDialog(self)
+        if dialog.exec():
+            self.process_name.setText(dialog.selected_process)
+
+    def _calibrate_head_range(self) -> None:
+        if not self._camera_running:
+            QMessageBox.information(self, "头部范围", "请先切换到头部模式并启动，再校准范围。")
+            return
+        dialog = HeadCenterCalibrationDialog(
+            self._host_window, self._config.filter.lost_face_timeout_ms / 1000, self
+        )
+        if dialog.exec():
+            self.head_reference = dialog.reference
+            self.head_range.setText("已记录范围")
+
     def _load(self) -> None:
         voice = self._config.voice
         self._select(self.mode, self._config.mode)
@@ -146,6 +195,9 @@ class SettingsDialog(QDialog):
         self.scroll_speed.setValue(self._config.scroll.v_max)
         self.head_trigger.setValue(self._config.thresholds.th_on)
         self.head_release.setValue(self._config.thresholds.th_off)
+        self.smooth_scroll.setChecked(self._config.injection.smooth_scroll)
+        self._select(self.scroll_target, self._config.injection.target)
+        self.process_name.setText(self._config.injection.process_name or "")
         self.pause_hotkey.setKeySequence(self._config.ui.hotkeys.toggle_pause)
         self.stop_hotkey.setKeySequence(self._config.ui.hotkeys.emergency_stop)
 
@@ -165,8 +217,12 @@ class SettingsDialog(QDialog):
         if self.head_release.value() >= self.head_trigger.value():
             QMessageBox.warning(self, "设置无效", "头部释放阈值必须小于触发阈值")
             return
-        voice = self._config.voice
-        self._config.config.mode = self.mode.currentData()
+        if self.scroll_target.currentData() == "process" and not self.process_name.text().strip():
+            QMessageBox.warning(self, "设置无效", "请选择或填写目标进程")
+            return
+        config = deepcopy(self._config.config)
+        voice = config.voice
+        config.mode = self.mode.currentData()
         voice.model_path = self.model_path.text().strip() or None
         voice.device = self.device.currentData()
         voice.require_wake_word = self.require_wake.isChecked()
@@ -177,12 +233,15 @@ class SettingsDialog(QDialog):
         voice.cooldown_ms = self.cooldown.value()
         voice.previous_key = self.previous_key.currentData()
         voice.next_key = self.next_key.currentData()
-        self._config.scroll.v_max = self.scroll_speed.value()
-        self._config.thresholds.th_on = self.head_trigger.value()
-        self._config.thresholds.th_off = self.head_release.value()
-        self._config.ui.hotkeys.toggle_pause = self.pause_hotkey.keySequence().toString()
-        self._config.ui.hotkeys.emergency_stop = self.stop_hotkey.keySequence().toString()
-        if not self._config.save():
+        config.scroll.v_max = self.scroll_speed.value()
+        config.thresholds.th_on = self.head_trigger.value()
+        config.thresholds.th_off = self.head_release.value()
+        config.injection.smooth_scroll = self.smooth_scroll.isChecked()
+        config.injection.target = self.scroll_target.currentData()
+        config.injection.process_name = self.process_name.text().strip() or None
+        config.ui.hotkeys.toggle_pause = self.pause_hotkey.keySequence().toString()
+        config.ui.hotkeys.emergency_stop = self.stop_hotkey.keySequence().toString()
+        if not self._config.apply_settings(config):
             QMessageBox.critical(self, "保存失败", "无法写入用户配置文件")
             return
         self.accept()

@@ -24,6 +24,7 @@ class MainWindow(QMainWindow):
     settings_requested = Signal()
     sensitivity_changed = Signal(int)
     exit_requested = Signal()
+    head_pitch_updated = Signal(float, float)
 
     def __init__(
         self,
@@ -108,8 +109,10 @@ class MainWindow(QMainWindow):
 
     def _show_calibration(self) -> None:
         self.calibration_wizard.prepare()
+        self.calibration_ready = False
         self.calibrate_requested.emit()
-        self.calibration_wizard.exec()
+        if self.calibration_ready:
+            self.calibration_wizard.exec()
 
     def _emergency_stop(self) -> None:
         self.stop_requested.emit()
@@ -134,6 +137,11 @@ class MainWindow(QMainWindow):
     def set_running(self, running: bool) -> None:
         self.panel.set_running(running)
         self.tray.set_running(running)
+        if not running:
+            self.set_paused(False)
+            self.update_control_state("STOPPED")
+            self.update_detection(False, "头部", 0.0)
+            self.update_position(None)
 
     def set_paused(self, paused: bool) -> None:
         self.panel.set_paused(paused)
@@ -170,9 +178,11 @@ class MainWindow(QMainWindow):
         self.panel.update_transcript(transcript)
         self.compact_status.update_transcript(transcript)
 
-    def update_calibration_value(self, position: float, raw_value: float) -> None:
+    def update_calibration_value(
+        self, position: float | None, raw_value: float | None, timestamp: float | None = None
+    ) -> None:
         if self.calibration_wizard.isVisible():
-            self.calibration_wizard.update_gaze(position, raw_value)
+            self.calibration_wizard.update_position(position, raw_value, timestamp)
 
     def show_error(self, title: str, message: str) -> None:
         QMessageBox.critical(self.panel, title, message)

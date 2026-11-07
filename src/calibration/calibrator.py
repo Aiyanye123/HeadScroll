@@ -6,6 +6,7 @@ M4: 标定模块
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import List, Optional, Callable
+import math
 import time
 import numpy as np
 
@@ -44,6 +45,15 @@ class Calibrator:
     DISCARD_DURATION_SEC = 0.3   # 丢弃动作过渡阶段
     MIN_SAMPLES = 10             # 最小有效采样数
     MIN_RANGE = 0.05             # 最小有效范围（r_bottom - r_top）
+
+    @classmethod
+    def head_reference_error(cls, top: float, middle: float, bottom: float) -> str:
+        """Head control uses downward-positive angles for both supported backends."""
+        if not cls._anchors_valid(top, middle, bottom):
+            return "标定数据无效或范围过小，请重新标定"
+        if not top < middle < bottom:
+            return "请按抬头、自然姿势、低头的顺序重新标定"
+        return ""
     
     def __init__(self):
         """初始化标定器"""
@@ -93,6 +103,8 @@ class Calibrator:
             当前位置采样是否完成
         """
         if not self._is_calibrating or self._current_position is None:
+            return False
+        if not math.isfinite(gaze_y_raw) or not math.isfinite(timestamp):
             return False
         
         elapsed = time.perf_counter() - self._start_time
@@ -201,9 +213,8 @@ class Calibrator:
         Returns:
             标准化注视高度 s ∈ [0, 1]
         """
-        if not self._is_calibrated:
-            # 未标定时使用默认线性映射
-            return np.clip(gaze_y_raw, 0.0, 1.0)
+        if not self._is_calibrated or not math.isfinite(gaze_y_raw):
+            return 0.5
         
         anchors = sorted(
             ((self._r_top, 0.0), (self._r_mid, 0.5), (self._r_bottom, 1.0)),
@@ -217,6 +228,7 @@ class Calibrator:
     
     def load_calibration(self, r_top: float, r_mid: float, r_bottom: float) -> None:
         """加载已保存的标定参数"""
+        self.clear()
         if not self._anchors_valid(r_top, r_mid, r_bottom):
             raise ValueError("标定点顺序或范围无效")
         self._r_top = r_top
@@ -226,8 +238,16 @@ class Calibrator:
 
     @classmethod
     def _anchors_valid(cls, r_top: float, r_mid: float, r_bottom: float) -> bool:
+        if not all(
+            isinstance(value, (int, float)) and math.isfinite(value)
+            for value in (r_top, r_mid, r_bottom)
+        ):
+            return False
         lower, upper = sorted((r_top, r_bottom))
         return upper - lower >= cls.MIN_RANGE and lower < r_mid < upper
+
+    def clear(self) -> None:
+        self._is_calibrated = False
     
     def set_callbacks(
         self,

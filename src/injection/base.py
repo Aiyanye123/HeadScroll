@@ -25,7 +25,7 @@ class InputInjector(ABC):
         发送滚轮事件
         
         Args:
-            delta: 滚轮步进，正值向下滚，负值向上滚
+            delta: 滚轮单位（120 单位为一格），正值向下滚，负值向上滚
             
         Returns:
             是否成功发送

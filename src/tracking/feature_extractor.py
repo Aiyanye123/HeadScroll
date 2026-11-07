@@ -1,6 +1,6 @@
 """
-M3: 特征提取模块
-从人脸关键点提取 gaze_y、眨眼状态、头姿等特征
+M3: 头部姿态提取模块
+从人脸变换矩阵或关键点提取头部俯仰角
 """
 
 from dataclasses import dataclass
@@ -8,7 +8,13 @@ from enum import Enum, auto
 from typing import Optional, Tuple
 import numpy as np
 
-from .face_tracker import FaceLandmarks, FaceTracker
+from .face_tracker import (
+    FaceLandmarks,
+    FaceTracker,
+    HEAD_POSE_LEGACY_ALGORITHM,
+    HEAD_POSE_MATRIX_ALGORITHM,
+    HEAD_POSE_UNAVAILABLE,
+)
 
 
 class BlinkState(Enum):
@@ -22,12 +28,14 @@ class BlinkState(Enum):
 class FeaturePacket:
     """特征数据包"""
     timestamp: float           # 帧时间戳
-    gaze_y_raw: float         # 原始注视高度 [0,1]，值越大视线越向下
+    gaze_y_raw: float         # Legacy packet field; head control does not use gaze.
     confidence: float         # 置信度 [0,1]
-    blink_state: BlinkState   # 眨眼状态
-    ear: float                # Eye Aspect Ratio
+    blink_state: BlinkState   # Legacy packet field; no blink control is active.
+    ear: float                # Legacy packet field; no EAR calculation is active.
     head_pitch: float         # 头部俯仰角（弧度）
     face_present: bool        # 是否检测到人脸
+    head_pose_valid: bool = False
+    head_pose_algorithm: str = HEAD_POSE_UNAVAILABLE
 
 
 class FeatureExtractor:
@@ -64,31 +72,23 @@ class FeatureExtractor:
                 confidence=0.0,
                 blink_state=BlinkState.OPEN,
                 ear=0.0,
-                head_pitch=0.0,
+                head_pitch=float("nan"),
                 face_present=False
             )
-        
-        # 提取注视高度
-        gaze_y_raw, gaze_confidence = self._extract_gaze_y(landmarks)
-        
-        # 提取 EAR 和眨眼状态
-        ear = self._calculate_ear(landmarks)
-        blink_state = self._determine_blink_state(ear)
         
         # 提取头部俯仰角
         head_pitch = self._extract_head_pitch(landmarks)
         
-        # 综合置信度
-        confidence = self._calculate_confidence(landmarks, gaze_confidence, ear)
-        
         return FeaturePacket(
             timestamp=timestamp,
-            gaze_y_raw=gaze_y_raw,
-            confidence=confidence,
-            blink_state=blink_state,
-            ear=ear,
+            gaze_y_raw=0.5,
+            confidence=float(np.isfinite(head_pitch)),
+            blink_state=BlinkState.OPEN,
+            ear=0.0,
             head_pitch=head_pitch,
-            face_present=True
+            face_present=True,
+            head_pose_valid=bool(np.isfinite(head_pitch)),
+            head_pose_algorithm=landmarks.head_pose_algorithm,
         )
     
     def _extract_gaze_y(self, landmarks: FaceLandmarks) -> Tuple[float, float]:
@@ -213,33 +213,49 @@ class FeatureExtractor:
         return state
     
     def _extract_head_pitch(self, landmarks: FaceLandmarks) -> float:
-        """
-        提取头部俯仰角
-        
-        使用鼻尖和下巴的相对位置估计
-        """
-        try:
-            if landmarks.transformation_matrix is not None:
-                rotation = landmarks.transformation_matrix[:3, :3]
-                return float(np.arctan2(rotation[2, 1], rotation[2, 2]))
+        """Return downward-positive pitch using the tracker's fixed algorithm."""
+        if landmarks.head_pose_algorithm == HEAD_POSE_MATRIX_ALGORITHM:
+            return self._matrix_head_pitch(landmarks.transformation_matrix)
+        if landmarks.head_pose_algorithm == HEAD_POSE_LEGACY_ALGORITHM:
+            return self._landmark_head_pitch(landmarks)
+        return float("nan")
 
+    @staticmethod
+    def _matrix_head_pitch(matrix: Optional[np.ndarray]) -> float:
+        try:
+            transform = np.asarray(matrix, dtype=np.float64)
+            if transform.shape != (4, 4) or not np.isfinite(transform).all():
+                return float("nan")
+            if not np.allclose(transform[3], [0, 0, 0, 1], atol=1e-6):
+                return float("nan")
+            # Remove scale before interpreting the canonical-to-runtime rotation.
+            left, scales, right = np.linalg.svd(transform[:3, :3])
+            if scales[0] <= 0 or scales[-1] <= scales[0] * 1e-6:
+                return float("nan")
+            rotation = left @ right
+            if np.linalg.det(rotation) <= 0:
+                return float("nan")
+            if np.hypot(rotation[2, 1], rotation[2, 2]) < 1e-6:
+                return float("nan")
+            return float(np.arctan2(rotation[2, 1], rotation[2, 2]))
+        except (TypeError, ValueError, np.linalg.LinAlgError):
+            return float("nan")
+
+    @staticmethod
+    def _landmark_head_pitch(landmarks: FaceLandmarks) -> float:
+        if landmarks.image_width <= 0 or landmarks.image_height <= 0:
+            return float("nan")
+        try:
             nose = landmarks.get_point(FaceTracker.NOSE_TIP)
             chin = landmarks.get_point(FaceTracker.CHIN)
-            
-            # 简化估计：基于鼻尖和下巴的 y 差值
-            # 正值表示抬头，负值表示低头
-            dy = chin[1] - nose[1]
-            dz = chin[2] - nose[2]
-            
-            # 估计俯仰角
-            if abs(dy) < 0.001:
-                return 0.0
-            
-            pitch = np.arctan2(dz, dy)
-            return float(pitch)
-            
-        except Exception:
-            return 0.0
+            dy = (chin[1] - nose[1]) * landmarks.image_height
+            # MediaPipe screen Z uses the same scale as X.
+            dz = (chin[2] - nose[2]) * landmarks.image_width
+            if not np.isfinite([dy, dz]).all() or np.hypot(dy, dz) < 1e-6:
+                return float("nan")
+            return float(np.arctan2(dz, dy))
+        except (IndexError, TypeError, ValueError):
+            return float("nan")
     
     def _calculate_confidence(
         self,
