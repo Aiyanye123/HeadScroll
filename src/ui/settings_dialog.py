@@ -21,16 +21,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .head_center_dialog import HeadCenterCalibrationDialog
 from .process_picker_dialog import ProcessPickerDialog
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, config, parent=None, *, host_window=None, camera_running=False):
+    def __init__(self, config, parent=None, *, calibrate_head_range):
         super().__init__(parent)
         self._config = config
-        self._host_window = host_window
-        self._camera_running = camera_running
+        self._range_calibration = calibrate_head_range
         self.head_reference = None
         self.setWindowTitle("控制设置")
         self.setMinimumSize(500, 580)
@@ -102,6 +100,10 @@ class SettingsDialog(QDialog):
         form.addRow("头部释放阈值:", self.head_release)
         self.head_range = QPushButton("校准头部范围")
         self.head_range.clicked.connect(self._calibrate_head_range)
+        self.mode.currentIndexChanged.connect(
+            lambda: self.head_range.setEnabled(self.mode.currentData() == "head")
+        )
+        self.head_range.setEnabled(self.mode.currentData() == "head")
         form.addRow("头部范围:", self.head_range)
         self.smooth_scroll = QCheckBox("使用亚刻度平滑滚动")
         form.addRow("滚动方式:", self.smooth_scroll)
@@ -164,14 +166,9 @@ class SettingsDialog(QDialog):
             self.process_name.setText(dialog.selected_process)
 
     def _calibrate_head_range(self) -> None:
-        if not self._camera_running:
-            QMessageBox.information(self, "头部范围", "请先切换到头部模式并启动，再校准范围。")
-            return
-        dialog = HeadCenterCalibrationDialog(
-            self._host_window, self._config.filter.lost_face_timeout_ms / 1000, self
-        )
-        if dialog.exec():
-            self.head_reference = dialog.reference
+        reference = self._range_calibration(self)
+        if reference is not None:
+            self.head_reference = reference
             self.head_range.setText("已记录范围")
 
     def _load(self) -> None:

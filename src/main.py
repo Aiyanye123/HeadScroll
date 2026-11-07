@@ -2,6 +2,7 @@
 
 import sys
 import time
+from contextlib import contextmanager
 from math import isfinite
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -26,6 +27,7 @@ from tracking.feature_extractor import FeatureExtractor, FeaturePacket
 from tracking.speech_recognizer import CommandParser, SpeechRecognizer, VoiceCommand
 from ui import MainWindow
 from ui.settings_dialog import SettingsDialog
+from ui.head_center_dialog import HeadCenterCalibrationDialog
 from ui.styles import apply_theme
 from utils import Config, get_logger, setup_logging
 
@@ -77,6 +79,7 @@ class InteractionController:
         self._fps_started_at = time.perf_counter()
         self._fps = 0.0
         self._running = False
+        self._head_calibration_active = False
         self._last_feature_timestamp = 0.0
 
     def _configure_mode_components(self) -> None:
@@ -104,11 +107,11 @@ class InteractionController:
         self.calibrator = Calibrator()
         self._calibration_key = None
 
-    def start(self) -> bool:
+    def start(self, *, paused: bool = False) -> bool:
         with self._lifecycle_lock:
-            return self._start()
+            return self._start(paused=paused)
 
-    def _start(self) -> bool:
+    def _start(self, *, paused: bool = False) -> bool:
         if self._running:
             return True
         if any(thread and thread.is_alive() for thread in self._worker_threads()):
@@ -144,9 +147,9 @@ class InteractionController:
 
         with self._control_lock:
             self._stop_event.clear()
-            self._voice_paused = False
+            self._voice_paused = paused
             self._last_voice_action_at = 0.0
-            self.head_fsm.reset(paused=False)
+            self.head_fsm.reset(paused=paused)
             self._reset_head_motion()
             self._sync_head_calibration()
             self._drain_queues()
@@ -200,6 +203,30 @@ class InteractionController:
         self.stop()
         self._close_tracker()
 
+    @contextmanager
+    def head_calibration_session(self):
+        """Temporarily collect head frames without enabling input output."""
+        previous_mode = self.mode
+        was_running = self.is_running
+        was_paused = self.is_paused
+        self.stop()
+        self.config.config.mode = "head"
+        started = False
+        self._head_calibration_active = True
+        try:
+            started = self.start(paused=True)
+            yield started
+        finally:
+            # An explicit stop or worker failure during calibration stays stopped.
+            restore_running = was_running and (not started or self.is_running)
+            self.stop()
+            self.config.config.mode = previous_mode
+            self._head_calibration_active = False
+            if restore_running:
+                self.start(paused=was_paused)
+            elif was_paused:
+                self.pause()
+
     def _close_tracker(self) -> None:
         if self._inference_thread and self._inference_thread.is_alive():
             self.logger.warning("Tracker left open while inference worker exits")
@@ -223,15 +250,15 @@ class InteractionController:
             self.injector.use_smooth_scroll = self.config.injection.smooth_scroll
             self.injector.target_mode = self.config.injection.target
             self.injector.target_process = self.config.injection.process_name
-            if was_running and not self._start():
+            if was_running and not self._start(paused=was_paused):
                 return False
-            if was_paused:
+            if was_paused and not was_running:
                 self.pause()
             return True
 
     def toggle_pause(self) -> None:
         with self._control_lock:
-            if not self._running:
+            if not self._running or self._head_calibration_active:
                 return
             if self.mode == "voice":
                 self._voice_paused = not self._voice_paused
@@ -250,16 +277,20 @@ class InteractionController:
             else:
                 self.head_fsm.pause()
                 self._reset_head_motion()
+        if self._running:
+            self.signals.state_updated.emit("PAUSED", True)
 
     def resume(self) -> None:
         with self._control_lock:
-            if not self._running:
+            if not self._running or self._head_calibration_active:
                 return
             if self.mode == "voice":
                 self._voice_paused = False
             else:
                 self._reset_head_motion()
                 self.head_fsm.resume()
+            state = "LISTENING" if self.mode == "voice" else self.head_fsm.state.name
+        self.signals.state_updated.emit(state, False)
 
     def set_sensitivity(self, value: int) -> None:
         if self.mode == "head":
@@ -274,7 +305,9 @@ class InteractionController:
 
     def _voice_loop(self) -> None:
         try:
-            self.signals.state_updated.emit("LISTENING", self._voice_paused)
+            self.signals.state_updated.emit(
+                "PAUSED" if self._voice_paused else "LISTENING", self._voice_paused
+            )
             self.speech_recognizer.run(self._stop_event, self._on_voice_command)
         except Exception as exc:
             self._worker_failed("语音识别", exc)
@@ -452,7 +485,10 @@ class InteractionController:
 
     def _head_output_tick(self, dt: float, now: float) -> None:
         self._expire_head_features(now)
-        if self._stop_event.is_set() or self.head_fsm.state != FSMState.SCROLLING:
+        if (
+            self._stop_event.is_set() or self._head_calibration_active
+            or self.head_fsm.state != FSMState.SCROLLING
+        ):
             self.scroll_controller.stop()
             return
         wheel_units = self.scroll_controller.tick(
@@ -588,8 +624,8 @@ class Application:
         self.controller.pause()
         self.window.set_paused(self.controller.is_running)
         dialog = SettingsDialog(
-            self.controller.config, self.window.panel, host_window=self.window,
-            camera_running=self.controller.is_running and self.controller.mode == "head",
+            self.controller.config, self.window.panel,
+            calibrate_head_range=self._calibrate_head_range,
         )
         if dialog.exec():
             if dialog.head_reference is not None:
@@ -607,6 +643,34 @@ class Application:
         elif not was_paused:
             self.controller.resume()
             self.window.set_paused(False)
+
+    def _calibrate_head_range(self, parent):
+        reference = None
+        try:
+            with self.controller.head_calibration_session() as started:
+                if started:
+                    self.window.set_running(True)
+                    self.window.set_paused(True)
+                    dialog = HeadCenterCalibrationDialog(
+                        self.window, self.controller.config.filter.lost_face_timeout_ms / 1000,
+                        parent,
+                    )
+                    if dialog.exec():
+                        reference = dialog.reference
+        finally:
+            self.window.set_mode(self.controller.mode)
+            self.window.set_running(self.controller.is_running)
+            paused = self.controller.is_running and self.controller.is_paused
+            self.window.set_paused(paused)
+            if self.controller.is_running:
+                if paused:
+                    state = "PAUSED"
+                elif self.controller.mode == "voice":
+                    state = "LISTENING"
+                else:
+                    state = self.controller.head_fsm.state.name
+                self.window.update_control_state(state)
+        return reference
 
     def _on_calibrate(self) -> None:
         if self.controller.mode != "head":
