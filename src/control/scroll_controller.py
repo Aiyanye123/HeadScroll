@@ -6,6 +6,9 @@ M7: 滚动控制器
 from typing import Optional
 
 
+WHEEL_UNITS_PER_NOTCH = 120
+
+
 class ScrollController:
     """滚动控制器"""
     
@@ -36,7 +39,7 @@ class ScrollController:
         # 状态
         self._v_current = 0.0  # 当前速度
         self._v_target = 0.0   # 目标速度
-        self._scroll_accumulator = 0.0  # 滚轮累积量
+        self._scroll_accumulator = 0.0  # 滚轮单位累积量（120 单位为一格）
     
     def set_target(self, v_target_ratio: float) -> None:
         """
@@ -50,15 +53,16 @@ class ScrollController:
         v_mag = pow(abs(v_ratio), self.gamma)
         self._v_target = v_mag * self.v_max * (1.0 if v_ratio >= 0 else -1.0)
     
-    def tick(self, dt: Optional[float] = None) -> int:
+    def tick(self, dt: Optional[float] = None, smooth_scroll: bool = False) -> int:
         """
         控制循环 tick
         
         Args:
             dt: 时间增量（秒），None 则使用默认
+            smooth_scroll: 按亚刻度滚轮单位输出，否则按整格输出
             
         Returns:
-            本次应发送的滚轮步进（整数）
+            本次应发送的滚轮单位（120 单位为一格，正值向下）
         """
         if dt is None:
             dt = 1.0 / self.tick_hz
@@ -66,14 +70,14 @@ class ScrollController:
         # 速度渐变
         self._update_velocity(dt)
         
-        # 累积滚轮量
-        self._scroll_accumulator += self._v_current * dt
+        # 以滚轮单位积分，保留不足一个输出步长的余量。
+        self._scroll_accumulator += self._v_current * dt * WHEEL_UNITS_PER_NOTCH
         
-        # 取整数部分作为滚轮步进
-        scroll_delta = int(self._scroll_accumulator)
-        self._scroll_accumulator -= scroll_delta
+        step_units = 1 if smooth_scroll else WHEEL_UNITS_PER_NOTCH
+        scroll_units = int(self._scroll_accumulator / step_units) * step_units
+        self._scroll_accumulator -= scroll_units
         
-        return scroll_delta
+        return scroll_units
     
     def _update_velocity(self, dt: float) -> None:
         """更新速度（带加减速限制）"""

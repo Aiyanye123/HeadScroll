@@ -5,9 +5,15 @@ M10: 配置管理模块
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Dict, Any
 from pathlib import Path
+from calibration import Calibrator
+
+
+HEAD_REFERENCE_ALGORITHM = "face_matrix_pitch_v1"
+HEAD_REFERENCE_ALGORITHMS = (HEAD_REFERENCE_ALGORITHM, "face_landmark_pitch_v1")
 
 
 @dataclass
@@ -22,29 +28,22 @@ class CameraConfig:
 @dataclass
 class CalibrationConfig:
     """标定配置"""
-    r_top: float = 0.25
-    r_mid: float = 0.50
-    r_bottom: float = 0.75
+    r_top: float = -0.15
+    r_mid: float = 0.0
+    r_bottom: float = 0.15
     method: str = "linear"
-    mode: str = "head"
     head_pitch_min: float = -0.15
     head_pitch_max: float = 0.15
     head_pitch_center: float = 0.0
     timestamp: Optional[str] = None
-
-
-@dataclass
-class FusionConfig:
-    """融合配置"""
-    w_gaze: float = 0.8
-    w_pitch: float = 0.2
+    reference_mode: Optional[str] = None
+    reference_algorithm: Optional[str] = None
 
 
 @dataclass
 class FilterConfig:
     """滤波配置"""
     ema_alpha: float = 0.85
-    confidence_min: float = 0.6
     lost_face_timeout_ms: float = 500
 
 
@@ -65,13 +64,6 @@ class ScrollConfig:
     a_up: float = 10.0
     a_down: float = 20.0
     tick_hz: float = 60
-
-
-@dataclass
-class BlinkConfig:
-    """眨眼配置"""
-    long_blink_ms: float = 600
-    cooldown_ms: float = 1500
 
 
 @dataclass
@@ -102,11 +94,9 @@ class AppConfig:
     """应用程序完整配置"""
     camera: CameraConfig = field(default_factory=CameraConfig)
     calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
-    fusion: FusionConfig = field(default_factory=FusionConfig)
     filter: FilterConfig = field(default_factory=FilterConfig)
     thresholds: ThresholdsConfig = field(default_factory=ThresholdsConfig)
     scroll: ScrollConfig = field(default_factory=ScrollConfig)
-    blink: BlinkConfig = field(default_factory=BlinkConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     injection: InjectionConfig = field(default_factory=InjectionConfig)
 
@@ -125,14 +115,22 @@ class Config:
             app_dir: 应用程序目录，None 则使用脚本所在目录
         """
         if app_dir is None:
-            # 默认使用项目根目录
-            app_dir = str(Path(__file__).parent.parent.parent)
+            if getattr(sys, "frozen", False):
+                app_dir = str(Path(sys.executable).resolve().parent)
+                default_config_dir = Path(sys._MEIPASS) / "config"
+            else:
+                app_dir = str(Path(__file__).parent.parent.parent)
+                default_config_dir = Path(app_dir) / "config"
+        else:
+            default_config_dir = Path(app_dir) / "config"
         
         self.app_dir = Path(app_dir)
         self.config_dir = self.app_dir / "config"
+        self._default_config_dir = default_config_dir
         
         self._config = AppConfig()
         self._config_path: Optional[Path] = None
+        self.head_pose_algorithm = HEAD_REFERENCE_ALGORITHM
     
     def load(self, config_path: Optional[str] = None) -> bool:
         """
@@ -154,7 +152,7 @@ class Config:
                 return True
         
         # 尝试加载默认配置
-        default_config = self.config_dir / self.DEFAULT_CONFIG_NAME
+        default_config = self._default_config_dir / self.DEFAULT_CONFIG_NAME
         if default_config.exists():
             return self._load_from_file(default_config)
         
@@ -181,17 +179,20 @@ class Config:
         if "camera" in data:
             config.camera = CameraConfig(**data["camera"])
         if "calibration" in data:
-            config.calibration = CalibrationConfig(**data["calibration"])
-        if "fusion" in data:
-            config.fusion = FusionConfig(**data["fusion"])
+            calibration_data = dict(data["calibration"])
+            old_mode = calibration_data.pop("mode", "head")
+            if old_mode != "head":
+                calibration_data["reference_mode"] = None
+                calibration_data["reference_algorithm"] = None
+            config.calibration = CalibrationConfig(**calibration_data)
         if "filter" in data:
-            config.filter = FilterConfig(**data["filter"])
+            filter_data = dict(data["filter"])
+            filter_data.pop("confidence_min", None)
+            config.filter = FilterConfig(**filter_data)
         if "thresholds" in data:
             config.thresholds = ThresholdsConfig(**data["thresholds"])
         if "scroll" in data:
             config.scroll = ScrollConfig(**data["scroll"])
-        if "blink" in data:
-            config.blink = BlinkConfig(**data["blink"])
         if "ui" in data:
             ui_data = data["ui"]
             hotkeys = HotkeysConfig(**ui_data.get("hotkeys", {}))
@@ -240,11 +241,9 @@ class Config:
         return {
             "camera": asdict(config.camera),
             "calibration": asdict(config.calibration),
-            "fusion": asdict(config.fusion),
             "filter": asdict(config.filter),
             "thresholds": asdict(config.thresholds),
             "scroll": asdict(config.scroll),
-            "blink": asdict(config.blink),
             "ui": {
                 "always_on_top": config.ui.always_on_top,
                 "show_overlay": config.ui.show_overlay,
@@ -261,10 +260,63 @@ class Config:
         timestamp: str
     ) -> None:
         """更新标定参数"""
+        error_message = Calibrator.reference_error(r_top, r_mid, r_bottom)
+        if error_message:
+            raise ValueError(error_message)
+        if self.head_pose_algorithm not in HEAD_REFERENCE_ALGORITHMS:
+            raise ValueError("头部姿态算法无效，请重新启动后标定")
         self._config.calibration.r_top = r_top
         self._config.calibration.r_mid = r_mid
         self._config.calibration.r_bottom = r_bottom
         self._config.calibration.timestamp = timestamp
+        calibration = self._config.calibration
+        calibration.reference_mode = "head"
+        calibration.head_pitch_center = r_mid
+        calibration.head_pitch_min = r_top - r_mid
+        calibration.head_pitch_max = r_bottom - r_mid
+        calibration.reference_algorithm = self.head_pose_algorithm
+
+    def update_head_center(self, up_pitch: float, down_pitch: float) -> bool:
+        """用头部两端记录更新同一套中心和相对范围。"""
+        if self.head_pose_algorithm not in HEAD_REFERENCE_ALGORITHMS:
+            return False
+        center = (up_pitch + down_pitch) / 2.0
+        if Calibrator.reference_error(up_pitch, center, down_pitch):
+            return False
+        calibration = self._config.calibration
+        calibration.head_pitch_center = center
+        calibration.head_pitch_min = up_pitch - center
+        calibration.head_pitch_max = down_pitch - center
+        calibration.reference_mode = "head"
+        calibration.reference_algorithm = self.head_pose_algorithm
+        return True
+
+    def calibration_reference(
+        self,
+        algorithm: Optional[str] = None,
+    ) -> Optional[tuple]:
+        """返回与当前控制算法匹配的有效参考，保留不兼容的旧数据。"""
+        calibration = self._config.calibration
+        if calibration.reference_mode != "head":
+            return None
+        algorithm = self.head_pose_algorithm if algorithm is None else algorithm
+        if (
+            algorithm not in HEAD_REFERENCE_ALGORITHMS
+            or calibration.reference_algorithm != algorithm
+        ):
+            return None
+        center = calibration.head_pitch_center
+        try:
+            reference = (
+                center + calibration.head_pitch_min,
+                center,
+                center + calibration.head_pitch_max,
+            )
+        except TypeError:
+            return None
+        if Calibrator.reference_error(*reference):
+            return None
+        return reference
     
     @property
     def config(self) -> AppConfig:
@@ -290,10 +342,6 @@ class Config:
     @property
     def scroll(self) -> ScrollConfig:
         return self._config.scroll
-    
-    @property
-    def blink(self) -> BlinkConfig:
-        return self._config.blink
     
     @property
     def ui(self) -> UIConfig:

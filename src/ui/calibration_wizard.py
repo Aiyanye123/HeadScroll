@@ -4,6 +4,7 @@ M9: 标定向导界面
 """
 
 from typing import Optional
+import math
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -13,10 +14,11 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont, QPainter, QColor, QPen
 
 from .styles import COLORS
+from calibration import Calibrator
 
 
-class GazeIndicator(QFrame):
-    """注视位置指示器"""
+class PositionIndicator(QFrame):
+    """头部位置指示器"""
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -78,11 +80,15 @@ class CalibrationWizard(QDialog):
         self._samples = {"top": [], "mid": [], "bottom": []}
         self._sample_timer = QTimer(self)
         self._sample_timer.timeout.connect(self._on_sample_timeout)
-        
-        self._on_sample_callback = None
+        self._step_timer = QTimer(self)
+        self._step_timer.setSingleShot(True)
+        self._step_timer.timeout.connect(self._start_step)
+        self._finish_timer = QTimer(self)
+        self._finish_timer.setSingleShot(True)
+        self._finish_timer.timeout.connect(self.accept)
         
         self._setup_ui()
-    
+
     def _setup_ui(self):
         """构建 UI"""
         layout = QVBoxLayout(self)
@@ -96,7 +102,7 @@ class CalibrationWizard(QDialog):
         
         # 说明
         self.instruction = QLabel(
-            "请按照提示注视屏幕的上方、中部和下方位置。\n"
+            "请按照提示抬头、保持自然姿势、低头。\n"
             "每个位置需要保持 1.5 秒。"
         )
         self.instruction.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -107,14 +113,14 @@ class CalibrationWizard(QDialog):
         indicator_layout = QHBoxLayout()
         indicator_layout.addStretch()
         
-        self.indicator = GazeIndicator()
+        self.indicator = PositionIndicator()
         indicator_layout.addWidget(self.indicator)
         
         indicator_layout.addStretch()
         layout.addLayout(indicator_layout)
         
         # 步骤提示
-        self.step_label = QLabel("步骤 1/3: 请注视屏幕上方")
+        self.step_label = QLabel("步骤 1/3: 请抬头")
         self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.step_label.setFont(QFont("", 12))
         layout.addWidget(self.step_label)
@@ -128,6 +134,7 @@ class CalibrationWizard(QDialog):
         # 状态文本
         self.status_label = QLabel("点击开始按钮开始标定")
         self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
         
         layout.addStretch()
@@ -156,9 +163,9 @@ class CalibrationWizard(QDialog):
     def _start_step(self):
         """开始当前步骤"""
         steps = [
-            ("top", 0.15, "步骤 1/3: 请注视屏幕上方"),
-            ("mid", 0.5, "步骤 2/3: 请注视屏幕中部"),
-            ("bottom", 0.85, "步骤 3/3: 请注视屏幕下方"),
+            ("top", 0.15, "步骤 1/3: 请抬头"),
+            ("mid", 0.5, "步骤 2/3: 请保持自然姿势"),
+            ("bottom", 0.85, "步骤 3/3: 请低头"),
         ]
         
         if self._current_step >= len(steps):
@@ -170,7 +177,7 @@ class CalibrationWizard(QDialog):
         self.step_label.setText(label)
         self.indicator.set_target(target_pos, True)
         self.progress.setValue(0)
-        self.status_label.setText("请保持注视...")
+        self.status_label.setText("请保持姿势...")
         
         # 开始采样计时
         self._sample_start_time = 0
@@ -191,17 +198,21 @@ class CalibrationWizard(QDialog):
             self._current_step += 1
             
             # 短暂延迟后进入下一步
-            QTimer.singleShot(300, self._start_step)
+            self._step_timer.start(300)
     
-    def update_gaze(self, gaze_y: float, sample_value: Optional[float] = None):
-        """更新注视位置（由外部调用）"""
-        self.indicator.set_position(gaze_y)
+    def update_position(self, position: Optional[float], sample_value: Optional[float] = None):
+        """更新头部位置（由外部调用）"""
+        value = position if sample_value is None else sample_value
+        if position is None or value is None or not math.isfinite(position) or not math.isfinite(value):
+            if self._sample_timer.isActive():
+                self.status_label.setText("未检测到有效人脸，请回到摄像头前")
+            return
+        self.indicator.set_position(position)
         
         # 添加采样（丢弃前 300ms）
-        if hasattr(self, '_current_key') and self._sample_start_time >= 300:
-            self._samples[self._current_key].append(
-                gaze_y if sample_value is None else sample_value
-            )
+        if self._sample_timer.isActive() and self._sample_start_time >= 300:
+            self.status_label.setText("请保持姿势...")
+            self._samples[self._current_key].append(value)
     
     def _finish_calibration(self):
         """完成标定"""
@@ -228,8 +239,9 @@ class CalibrationWizard(QDialog):
             self.start_btn.setEnabled(True)
             return
         
-        if r_bottom - r_top < 0.05:
-            self.status_label.setText("标定失败：范围过小，请调整坐姿")
+        error_message = Calibrator.reference_error(r_top, r_mid, r_bottom)
+        if error_message:
+            self.status_label.setText(f"标定失败：{error_message}")
             self.start_btn.setEnabled(True)
             return
         
@@ -238,10 +250,16 @@ class CalibrationWizard(QDialog):
         
         self.calibration_complete.emit(r_top, r_mid, r_bottom)
         
-        QTimer.singleShot(1500, self.accept)
+        self._finish_timer.start(1500)
     
     def _cancel(self):
         """取消标定"""
-        self._sample_timer.stop()
-        self.calibration_cancelled.emit()
         self.reject()
+
+    def done(self, result):
+        self._sample_timer.stop()
+        self._step_timer.stop()
+        self._finish_timer.stop()
+        if result != QDialog.DialogCode.Accepted:
+            self.calibration_cancelled.emit()
+        super().done(result)

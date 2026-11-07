@@ -6,6 +6,7 @@ M4: 标定模块
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import List, Optional, Callable
+import math
 import time
 import numpy as np
 
@@ -41,9 +42,24 @@ class Calibrator:
     
     # 采样参数
     SAMPLE_DURATION_SEC = 1.5    # 每个位置采样时长
-    DISCARD_DURATION_SEC = 0.3   # 丢弃前 N 秒（避免眼动过渡）
+    DISCARD_DURATION_SEC = 0.3   # 丢弃前 N 秒（避免姿态过渡）
     MIN_SAMPLES = 10             # 最小有效采样数
     MIN_RANGE = 0.05             # 最小有效范围（r_bottom - r_top）
+
+    @classmethod
+    def reference_error(cls, r_top: float, r_mid: float, r_bottom: float) -> str:
+        """验证三点参考值的有限性、顺序和范围。"""
+        values = (r_top, r_mid, r_bottom)
+        if not all(
+            isinstance(value, (int, float)) and math.isfinite(value)
+            for value in values
+        ):
+            return "标定数据无效，请重新标定"
+        if not r_top < r_mid < r_bottom:
+            return "标定顺序错误，请按抬头、自然姿势、低头重新标定"
+        if r_bottom - r_top < cls.MIN_RANGE:
+            return "标定范围过小，请调整坐姿或摄像头位置后重新标定"
+        return ""
     
     def __init__(self):
         """初始化标定器"""
@@ -53,9 +69,9 @@ class Calibrator:
         self._start_time = 0.0
         
         # 标定结果
-        self._r_top = 0.25
-        self._r_mid = 0.50
-        self._r_bottom = 0.75
+        self._r_top = -0.15
+        self._r_mid = 0.0
+        self._r_bottom = 0.15
         self._is_calibrated = False
         
         # 回调
@@ -81,18 +97,20 @@ class Calibrator:
         self._start_time = time.perf_counter()
         self._samples[position] = CalibrationSample(position)
     
-    def add_sample(self, gaze_y_raw: float, timestamp: float) -> bool:
+    def add_sample(self, head_pitch: float, timestamp: float) -> bool:
         """
         添加采样数据
         
         Args:
-            gaze_y_raw: 原始注视高度
+            head_pitch: 头部俯仰角
             timestamp: 时间戳
             
         Returns:
             当前位置采样是否完成
         """
         if not self._is_calibrating or self._current_position is None:
+            return False
+        if not math.isfinite(head_pitch) or not math.isfinite(timestamp):
             return False
         
         elapsed = time.perf_counter() - self._start_time
@@ -103,7 +121,7 @@ class Calibrator:
         
         # 添加采样
         sample = self._samples[self._current_position]
-        sample.values.append(gaze_y_raw)
+        sample.values.append(head_pitch)
         sample.timestamps.append(timestamp)
         
         # 检查是否采样完成
@@ -141,12 +159,12 @@ class Calibrator:
                 error_message="采样数据不足，请重新标定"
             )
         
-        # 检查范围是否足够
-        if r_bottom - r_top < self.MIN_RANGE:
+        error_message = self.reference_error(r_top, r_mid, r_bottom)
+        if error_message:
             return CalibrationResult(
                 r_top=r_top, r_mid=r_mid, r_bottom=r_bottom,
                 is_valid=False,
-                error_message="标定范围过小，请调整坐姿或摄像头位置后重新标定"
+                error_message=error_message
             )
         
         # 保存结果
@@ -186,9 +204,9 @@ class Calibrator:
         
         return float(np.mean(trimmed))
     
-    def map(self, gaze_y_raw: float) -> float:
+    def map(self, head_pitch: float) -> float:
         """
-        将原始注视高度映射到标准化值 s ∈ [0, 1]
+        将头部俯仰角映射到标准化位置 s ∈ [0, 1]
         
         使用分段线性映射：
         - s=0 对应 r_top
@@ -196,37 +214,38 @@ class Calibrator:
         - s=1 对应 r_bottom
         
         Args:
-            gaze_y_raw: 原始注视高度
+            head_pitch: 头部俯仰角
             
         Returns:
-            标准化注视高度 s ∈ [0, 1]
+            标准化头部位置 s ∈ [0, 1]
         """
-        if not self._is_calibrated:
-            # 未标定时使用默认线性映射
-            return np.clip(gaze_y_raw, 0.0, 1.0)
+        if not self._is_calibrated or not math.isfinite(head_pitch):
+            return 0.5
         
         # 分段线性映射
-        if gaze_y_raw <= self._r_mid:
+        if head_pitch <= self._r_mid:
             # 上半段：[r_top, r_mid] -> [0, 0.5]
-            if self._r_mid - self._r_top < 0.001:
-                s = 0.25
-            else:
-                s = 0.5 * (gaze_y_raw - self._r_top) / (self._r_mid - self._r_top)
+            s = 0.5 * (head_pitch - self._r_top) / (self._r_mid - self._r_top)
         else:
             # 下半段：[r_mid, r_bottom] -> [0.5, 1]
-            if self._r_bottom - self._r_mid < 0.001:
-                s = 0.75
-            else:
-                s = 0.5 + 0.5 * (gaze_y_raw - self._r_mid) / (self._r_bottom - self._r_mid)
+            s = 0.5 + 0.5 * (head_pitch - self._r_mid) / (self._r_bottom - self._r_mid)
         
         return float(np.clip(s, 0.0, 1.0))
     
-    def load_calibration(self, r_top: float, r_mid: float, r_bottom: float) -> None:
+    def load_calibration(self, r_top: float, r_mid: float, r_bottom: float) -> bool:
         """加载已保存的标定参数"""
+        self._is_calibrated = False
+        if self.reference_error(r_top, r_mid, r_bottom):
+            return False
         self._r_top = r_top
         self._r_mid = r_mid
         self._r_bottom = r_bottom
         self._is_calibrated = True
+        return True
+
+    def clear(self) -> None:
+        """停用当前参考，等待有效的重新标定。"""
+        self._is_calibrated = False
     
     def set_callbacks(
         self,

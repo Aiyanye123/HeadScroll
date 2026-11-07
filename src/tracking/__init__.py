@@ -1,5 +1,13 @@
-"""人脸追踪与特征提取模块"""
-from .face_tracker import FaceTracker
-from .feature_extractor import FeatureExtractor, FeaturePacket, BlinkState
+"""人脸追踪与头姿特征提取模块"""
+from .face_tracker import (
+    FaceTracker,
+    HEAD_POSE_LEGACY_ALGORITHM,
+    HEAD_POSE_MATRIX_ALGORITHM,
+    HEAD_POSE_UNAVAILABLE,
+)
+from .feature_extractor import FeatureExtractor, FeaturePacket
 
-__all__ = ["FaceTracker", "FeatureExtractor", "FeaturePacket", "BlinkState"]
+__all__ = [
+    "FaceTracker", "FeatureExtractor", "FeaturePacket",
+    "HEAD_POSE_MATRIX_ALGORITHM", "HEAD_POSE_LEGACY_ALGORITHM", "HEAD_POSE_UNAVAILABLE",
+]

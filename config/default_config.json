@@ -6,23 +6,19 @@
     "target_fps": 30
   },
   "calibration": {
-    "r_top": 0.25,
-    "r_mid": 0.50,
-    "r_bottom": 0.75,
+    "r_top": -0.12,
+    "r_mid": 0.0,
+    "r_bottom": 0.12,
     "method": "linear",
-    "mode": "head",
     "head_pitch_min": -0.12,
     "head_pitch_max": 0.12,
-    "head_pitch_center": 0.2,
-    "timestamp": null
-  },
-  "fusion": {
-    "w_gaze": 0.8,
-    "w_pitch": 0.2
+    "head_pitch_center": 0.0,
+    "timestamp": null,
+    "reference_mode": null,
+    "reference_algorithm": null
   },
   "filter": {
     "ema_alpha": 0.75,
-    "confidence_min": 0.4,
     "lost_face_timeout_ms": 500
   },
   "thresholds": {
@@ -37,10 +33,6 @@
     "a_up": 8.0,
     "a_down": 16.0,
     "tick_hz": 90
-  },
-  "blink": {
-    "long_blink_ms": 900,
-    "cooldown_ms": 2000
   },
   "ui": {
     "always_on_top": true,

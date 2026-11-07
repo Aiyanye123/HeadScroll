@@ -1,9 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+import sys
+
+_spec_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 from PyInstaller.utils.hooks import collect_dynamic_libs, collect_submodules
 
 datas = [
-    ('../config', 'config'),
-    ('../assets/models/face_landmarker.task', 'assets/models'),
+    (os.path.join(_spec_dir, "..", "config", "default_config.json"), "config"),
+    (os.path.join(_spec_dir, "..", "assets", "models", "face_landmarker.task"), "assets/models"),
 ]
 binaries = []
 hiddenimports = [
@@ -17,12 +21,6 @@ hiddenimports = [
 ]
 binaries += collect_dynamic_libs('mediapipe')
 hiddenimports += collect_submodules('mediapipe.tasks')
-
-
-import os
-import sys
-
-_spec_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 
 a = Analysis(
     [os.path.join(_spec_dir, 'main.py')],
@@ -45,6 +43,11 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Do not bundle unrelated ICU DLLs resolved from another application's PATH.
+a.binaries = [
+    binary for binary in a.binaries
+    if not os.path.basename(binary[0]).casefold().startswith("icu")
+]
 pyz = PYZ(a.pure)
 
 exe = EXE(

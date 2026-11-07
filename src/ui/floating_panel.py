@@ -30,7 +30,7 @@ class FloatingPanel(QWidget):
         self._is_paused = False
 
         # 窗口属性
-        self.setWindowTitle("眼动滚动控制")
+        self.setWindowTitle("头部滚动控制")
         flags = Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint if always_on_top else Qt.WindowType.Window
         flags |= Qt.WindowType.WindowCloseButtonHint
         self.setWindowFlags(flags)
@@ -48,7 +48,7 @@ class FloatingPanel(QWidget):
         status_layout.setSpacing(8)
 
         face_row = QHBoxLayout()
-        face_label = QLabel("人脸检测")
+        face_label = QLabel("头部姿态")
         face_label.setProperty("class", "secondary")
         face_row.addWidget(face_label)
         self.face_status = QLabel("--")
@@ -57,17 +57,17 @@ class FloatingPanel(QWidget):
         face_row.addWidget(self.face_status)
         status_layout.addLayout(face_row)
 
-        gaze_row = QHBoxLayout()
-        gaze_label = QLabel("注视位置")
-        gaze_label.setProperty("class", "secondary")
-        gaze_row.addWidget(gaze_label)
-        self.gaze_bar = QProgressBar()
-        self.gaze_bar.setRange(0, 100)
-        self.gaze_bar.setValue(50)
-        self.gaze_bar.setTextVisible(False)
-        self.gaze_bar.setFixedHeight(8)
-        gaze_row.addWidget(self.gaze_bar, 1)
-        status_layout.addLayout(gaze_row)
+        position_row = QHBoxLayout()
+        position_label = QLabel("头部位置")
+        position_label.setProperty("class", "secondary")
+        position_row.addWidget(position_label)
+        self.position_bar = QProgressBar()
+        self.position_bar.setRange(0, 100)
+        self.position_bar.setValue(50)
+        self.position_bar.setTextVisible(False)
+        self.position_bar.setFixedHeight(8)
+        position_row.addWidget(self.position_bar, 1)
+        status_layout.addLayout(position_row)
 
         fsm_row = QHBoxLayout()
         fsm_label = QLabel("滚动状态")
@@ -168,16 +168,16 @@ class FloatingPanel(QWidget):
 
     def update_face_status(self, detected: bool, confidence: float = 0.0):
         """更新人脸检测状态"""
-        if detected:
-            self.face_status.setText(f"已检测 ({confidence:.0%})")
+        if detected and confidence > 0:
+            self.face_status.setText("有效")
             self.face_status.setStyleSheet(f"font-weight: 600; color: {COLORS['success']};")
         else:
-            self.face_status.setText("未检测")
+            self.face_status.setText("姿态无效" if detected else "未检测到人脸")
             self.face_status.setStyleSheet(f"font-weight: 600; color: {COLORS['danger']};")
 
-    def update_gaze(self, s_f: float):
-        """更新注视位置"""
-        self.gaze_bar.setValue(int(s_f * 100))
+    def update_position(self, s_f: float):
+        """更新头部位置"""
+        self.position_bar.setValue(int(s_f * 100))
 
     def update_fsm_state(self, state_name: str, is_scrolling: bool = False):
         """更新状态机状态"""

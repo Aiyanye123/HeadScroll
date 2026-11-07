@@ -1,13 +1,12 @@
 ﻿"""
 M9: 设置对话框
-用于切换控制模式
+用于设置头部范围、快捷键和滚轮目标
 """
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit,
-    QKeySequenceEdit
+    QKeySequenceEdit, QMessageBox
 )
-from PySide6.QtCore import Qt
 from .process_picker_dialog import ProcessPickerDialog
 from .head_center_dialog import HeadCenterCalibrationDialog
 
@@ -15,10 +14,11 @@ from .head_center_dialog import HeadCenterCalibrationDialog
 class SettingsDialog(QDialog):
     """设置对话框"""
 
-    def __init__(self, config, host_window=None, parent=None):
+    def __init__(self, config, host_window=None, parent=None, *, camera_running=False):
         super().__init__(parent)
         self._config = config
         self._host_window = host_window
+        self._camera_running = camera_running
         self.setWindowTitle("设置")
         self.setModal(True)
         self.setMinimumSize(420, 360)
@@ -28,24 +28,7 @@ class SettingsDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        title = QLabel("控制模式")
-        title.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(title)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        row.addWidget(QLabel("模式:"))
-        self.mode_combo = QComboBox()
-        self.mode_combo.addItem("眼动(eye)", "eye")
-        self.mode_combo.addItem("抬头/低头(head)", "head")
-        row.addWidget(self.mode_combo)
-        layout.addLayout(row)
-
-        hint = QLabel("切换模式后请重新标定")
-        hint.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        layout.addWidget(hint)
-
-        self.auto_center_btn = QPushButton("自动校准中心")
+        self.auto_center_btn = QPushButton("校准头部范围")
         self.auto_center_btn.clicked.connect(self._auto_calibrate_center)
         layout.addWidget(self.auto_center_btn)
 
@@ -99,15 +82,13 @@ class SettingsDialog(QDialog):
             self.process_edit.setText(dialog.selected_process)
 
     def _auto_calibrate_center(self):
+        if not self._camera_running:
+            QMessageBox.information(self, "头部范围校准", "请先启动摄像头，再校准头部范围。")
+            return
         dialog = HeadCenterCalibrationDialog(self._config, self._host_window, self)
-        if dialog.exec():
-            self._load_from_config()
+        dialog.exec()
 
     def _load_from_config(self):
-        mode = getattr(self._config.calibration, "mode", "eye")
-        index = 0 if mode != "head" else 1
-        self.mode_combo.setCurrentIndex(index)
-
         pause_hotkey = getattr(self._config.ui.hotkeys, "toggle_pause", "Ctrl+Shift+Space")
         self.pause_hotkey_edit.setKeySequence(pause_hotkey)
 
@@ -123,8 +104,6 @@ class SettingsDialog(QDialog):
         self.process_edit.setText(process_name)
 
     def _on_save(self):
-        mode = self.mode_combo.currentData()
-        self._config.calibration.mode = mode
         self._config.ui.hotkeys.toggle_pause = self.pause_hotkey_edit.keySequence().toString()
         self._config.injection.target = self.target_combo.currentData()
         self._config.injection.process_name = self.process_edit.text().strip() or None

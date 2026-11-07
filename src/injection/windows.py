@@ -1,9 +1,10 @@
 """
 M8: 输入注入模块 - Windows 实现
-使用 ctypes 调用 SendInput 发送滚轮事件
+使用 ctypes 向目标窗口发送有超时限制的滚轮消息
 """
 
 import ctypes
+import ntpath
 from ctypes import wintypes
 from typing import Optional
 
@@ -13,14 +14,15 @@ from .base import InputInjector
 
 
 # Windows API 常量
-MOUSEEVENTF_WHEEL = 0x0800
 WM_MOUSEWHEEL = 0x020A
-WHEEL_DELTA = 120  # Windows 标准滚轮单位
+MOUSEEVENTF_WHEEL = 0x0800
+INPUT_MOUSE = 0
+SMTO_ABORTIFHUNG = 0x0002
+SMTO_ERRORONEXIT = 0x0020
+SEND_TIMEOUT_MS = 100
 
 # 某些 Python 版本的 wintypes 里没有 LRESULT
 LRESULT = getattr(wintypes, "LRESULT", wintypes.LPARAM)
-
-INPUT_MOUSE = 0
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -31,17 +33,15 @@ class MOUSEINPUT(ctypes.Structure):
         ("mouseData", wintypes.DWORD),
         ("dwFlags", wintypes.DWORD),
         ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ("dwExtraInfo", ctypes.c_size_t),
     ]
 
 
 class INPUT(ctypes.Structure):
-    """输入结构"""
+    """系统输入结构"""
     class _INPUT_UNION(ctypes.Union):
-        _fields_ = [
-            ("mi", MOUSEINPUT),
-        ]
-    
+        _fields_ = [("mi", MOUSEINPUT)]
+
     _anonymous_ = ("_input",)
     _fields_ = [
         ("type", wintypes.DWORD),
@@ -73,14 +73,13 @@ class WindowsInjector(InputInjector):
         初始化 Windows 注入器
         
         Args:
-            use_smooth_scroll: 是否使用平滑滚动（小步多次）
+            use_smooth_scroll: 是否使用平滑滚动（供控制器选择输出步长）
         """
         self.use_smooth_scroll = use_smooth_scroll
         self.target_mode = target_mode  # cursor / foreground / process
         self.target_process = target_process
         self._user32: Optional[ctypes.WinDLL] = None
         self._kernel32: Optional[ctypes.WinDLL] = None
-        self._send_input = None
         self._initialized = False
         self._last_error: Optional[str] = None
         self._logger = get_logger("injector")
@@ -88,22 +87,24 @@ class WindowsInjector(InputInjector):
     def init(self) -> bool:
         """初始化 Windows API"""
         try:
-            self._user32 = ctypes.windll.user32
-            self._kernel32 = ctypes.windll.kernel32
-            self._send_input = self._user32.SendInput
-            self._send_input.argtypes = [
+            self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+            self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            self._user32.SendInput.argtypes = [
                 wintypes.UINT,
                 ctypes.POINTER(INPUT),
-                ctypes.c_int
+                ctypes.c_int,
             ]
-            self._send_input.restype = wintypes.UINT
-            self._user32.SendMessageW.argtypes = [
+            self._user32.SendInput.restype = wintypes.UINT
+            self._user32.SendMessageTimeoutW.argtypes = [
                 wintypes.HWND,
                 wintypes.UINT,
                 wintypes.WPARAM,
                 wintypes.LPARAM,
+                wintypes.UINT,
+                wintypes.UINT,
+                ctypes.POINTER(ctypes.c_size_t),
             ]
-            self._user32.SendMessageW.restype = LRESULT
+            self._user32.SendMessageTimeoutW.restype = LRESULT
             self._user32.GetCursorPos.argtypes = [ctypes.POINTER(POINT)]
             self._user32.GetCursorPos.restype = wintypes.BOOL
             self._user32.WindowFromPoint.argtypes = [POINT]
@@ -151,45 +152,24 @@ class WindowsInjector(InputInjector):
         发送滚轮事件
         
         Args:
-            delta: 滚轮步进，正值向下滚
+            delta: 滚轮单位（120 单位为一格），正值向下滚
             
         Returns:
             是否成功
         """
-        if not self._initialized or self._send_input is None:
+        if not self._initialized or self._user32 is None:
+            self._last_error = "Injector is not initialized"
             return False
         
         if delta == 0:
             return True
         
         try:
-            if self.use_smooth_scroll:
-                # 平滑滚动：每次发送 1 个单位
-                for _ in range(abs(delta)):
-                    wheel_delta = -WHEEL_DELTA if delta > 0 else WHEEL_DELTA
-                    if not self._send_wheel_by_mode(wheel_delta):
-                        self._send_wheel_event(wheel_delta)
-            else:
-                # 一次性发送
-                wheel_delta = -delta * WHEEL_DELTA
-                if not self._send_wheel_by_mode(wheel_delta):
-                    self._send_wheel_event(wheel_delta)
-            return True
-        except Exception:
+            self._last_error = None
+            return self._send_wheel_by_mode(-delta)
+        except Exception as exc:
+            self._last_error = f"{type(exc).__name__}: {exc}"
             return False
-    
-    def _send_wheel_event(self, wheel_delta: int) -> None:
-        """发送单次滚轮事件"""
-        inp = INPUT()
-        inp.type = INPUT_MOUSE
-        inp.mi.dx = 0
-        inp.mi.dy = 0
-        inp.mi.mouseData = ctypes.c_ulong(wheel_delta & 0xFFFFFFFF).value
-        inp.mi.dwFlags = MOUSEEVENTF_WHEEL
-        inp.mi.time = 0
-        inp.mi.dwExtraInfo = None
-        
-        self._send_input(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
 
     def _send_wheel_by_mode(self, wheel_delta: int) -> bool:
         """按目标模式发送滚轮事件"""
@@ -198,7 +178,24 @@ class WindowsInjector(InputInjector):
             return self._send_wheel_to_foreground_window(wheel_delta)
         if mode == "process":
             return self._send_wheel_to_process_window(wheel_delta)
-        return self._send_wheel_to_cursor_window(wheel_delta)
+        if mode == "cursor":
+            return self._send_wheel_to_cursor_window(wheel_delta)
+        self._last_error = f"Unknown target mode: {self.target_mode}"
+        return False
+
+    def _send_wheel_event(self, wheel_delta: int) -> bool:
+        """普通模式无法定位窗口时发送系统滚轮事件"""
+        inp = INPUT()
+        inp.type = INPUT_MOUSE
+        inp.mi.mouseData = wheel_delta & 0xFFFFFFFF
+        inp.mi.dwFlags = MOUSEEVENTF_WHEEL
+        ctypes.set_last_error(0)
+        sent = self._user32.SendInput(1, ctypes.byref(inp), ctypes.sizeof(INPUT))
+        if sent != 1:
+            error_code = ctypes.get_last_error()
+            self._last_error = f"SendInput failed (Win32 error {error_code})"
+            return False
+        return True
 
     def _send_wheel_to_cursor_window(self, wheel_delta: int) -> bool:
         """向鼠标所在窗口直接发送滚轮事件"""
@@ -206,10 +203,10 @@ class WindowsInjector(InputInjector):
             return False
         pt = POINT()
         if not self._user32.GetCursorPos(ctypes.byref(pt)):
-            return False
+            return self._send_wheel_event(wheel_delta)
         hwnd = self._user32.WindowFromPoint(pt)
         if not hwnd:
-            return False
+            return self._send_wheel_event(wheel_delta)
         return self._send_wheel_to_window(hwnd, wheel_delta, pt)
 
     def _send_wheel_to_foreground_window(self, wheel_delta: int) -> bool:
@@ -218,7 +215,7 @@ class WindowsInjector(InputInjector):
             return False
         hwnd = self._user32.GetForegroundWindow()
         if not hwnd:
-            return False
+            return self._send_wheel_event(wheel_delta)
         pt = POINT()
         if not self._user32.GetCursorPos(ctypes.byref(pt)):
             pt.x, pt.y = 0, 0
@@ -228,8 +225,8 @@ class WindowsInjector(InputInjector):
         """向指定进程的窗口发送滚轮事件"""
         hwnd = self._find_window_by_process_name(self.target_process)
         if not hwnd:
-            # 未找到目标进程窗口时，回退到前台窗口
-            return self._send_wheel_to_foreground_window(wheel_delta)
+            self._last_error = f"No window for process: {self.target_process}"
+            return False
         pt = POINT()
         if self._user32 and self._user32.GetCursorPos(ctypes.byref(pt)):
             pass
@@ -241,17 +238,30 @@ class WindowsInjector(InputInjector):
         """向指定窗口发送滚轮事件"""
         if self._user32 is None:
             return False
-        delta = ctypes.c_short(wheel_delta).value & 0xFFFF
+        if not -32768 <= wheel_delta <= 32767:
+            self._last_error = "Wheel delta is outside the signed 16-bit range"
+            return False
+        delta = wheel_delta & 0xFFFF
         wparam = delta << 16
         lparam = ((pt.y & 0xFFFF) << 16) | (pt.x & 0xFFFF)
-        self._user32.SendMessageW(hwnd, WM_MOUSEWHEEL, wparam, lparam)
+        message_result = ctypes.c_size_t()
+        ctypes.set_last_error(0)
+        sent = self._user32.SendMessageTimeoutW(
+            hwnd, WM_MOUSEWHEEL, wparam, lparam,
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT, SEND_TIMEOUT_MS,
+            ctypes.byref(message_result),
+        )
+        if not sent:
+            error_code = ctypes.get_last_error()
+            self._last_error = f"Wheel send failed or timed out (Win32 error {error_code})"
+            return False
         return True
 
     def _find_window_by_process_name(self, process_name: Optional[str]) -> Optional[int]:
         """按进程名查找一个可见顶层窗口句柄"""
         if not process_name or self._user32 is None or self._kernel32 is None:
             return None
-        target = process_name.lower()
+        target = ntpath.basename(process_name.strip()).lower()
         if not target.endswith(".exe"):
             target = target + ".exe"
 
@@ -283,8 +293,7 @@ class WindowsInjector(InputInjector):
             buf_len = wintypes.DWORD(260)
             buf = ctypes.create_unicode_buffer(buf_len.value)
             if self._kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(buf_len)):
-                path = buf.value
-                return path.split("\\\\")[-1]
+                return ntpath.basename(buf.value)
             return None
         finally:
             self._kernel32.CloseHandle(handle)
@@ -294,7 +303,6 @@ class WindowsInjector(InputInjector):
         self._initialized = False
         self._user32 = None
         self._kernel32 = None
-        self._send_input = None
         self._last_error = None
     
     @property
@@ -304,5 +312,5 @@ class WindowsInjector(InputInjector):
 
     @property
     def last_error(self) -> Optional[str]:
-        """初始化失败时的错误信息"""
+        """最近一次初始化或发送失败时的错误信息"""
         return self._last_error

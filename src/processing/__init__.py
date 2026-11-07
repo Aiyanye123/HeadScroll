@@ -1,4 +1,4 @@
 """滤波处理模块"""
-from .filter import GazeFilter
+from .filter import PositionFilter
 
-__all__ = ["GazeFilter"]
+__all__ = ["PositionFilter"]

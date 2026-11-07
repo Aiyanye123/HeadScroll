@@ -1,5 +1,5 @@
 """
-眼动控制网页漫画滚动 - 主程序入口
+头姿控制网页漫画滚动 - 主程序入口
 
 实现线程管理与数据流：
 - T1 Capture: 摄像头采集
@@ -10,13 +10,14 @@
 
 import sys
 import time
+from math import isfinite
 from pathlib import Path
 
 # Ensure local modules (capture/, tracking/, etc.) are importable in dev and PyInstaller.
 _ROOT = Path(__file__).resolve().parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
-from threading import Thread, Event
+from threading import Thread, Event, Lock
 from queue import Queue, Empty
 from typing import Optional
 
@@ -27,9 +28,9 @@ from PySide6.QtCore import QTimer, QObject, Signal
 
 # 导入模块
 from capture import Camera
-from tracking import FaceTracker, FeatureExtractor, FeaturePacket, BlinkState
+from tracking import FaceTracker, FeatureExtractor, FeaturePacket
 from calibration import Calibrator
-from processing import GazeFilter
+from processing import PositionFilter
 from control import IntentFSM, FSMState, ScrollController
 from injection import PlatformInjector
 from ui import MainWindow
@@ -45,8 +46,8 @@ class WorkerSignals(QObject):
     error_occurred = Signal(str, str)  # component, message
 
 
-class EyeScrollController:
-    """眼动滚动控制器 - 主控制类"""
+class HeadScrollController:
+    """头姿滚动控制器 - 主控制类"""
     
     def __init__(self):
         self.logger = get_logger("main")
@@ -61,6 +62,8 @@ class EyeScrollController:
         # 线程控制
         self._stop_event = Event()
         self._pause_event = Event()
+        self._lifecycle_lock = Lock()
+        self._control_lock = Lock()
         self._capture_thread: Optional[Thread] = None
         self._inference_thread: Optional[Thread] = None
         self._control_thread: Optional[Thread] = None
@@ -77,6 +80,7 @@ class EyeScrollController:
         self._fps_start_time = time.perf_counter()
         self._current_fps = 0.0
         self._running = False
+        self._last_feature_timestamp = time.perf_counter()
     
     def _create_components(self):
         """创建各模块组件"""
@@ -92,23 +96,21 @@ class EyeScrollController:
         
         # M2: 人脸追踪
         self.face_tracker = FaceTracker()
+        cfg.head_pose_algorithm = self.face_tracker.head_pose_algorithm
         
         # M3: 特征提取
         self.feature_extractor = FeatureExtractor()
         
         # M4: 标定器
         self.calibrator = Calibrator()
-        if cfg.calibration.timestamp:
-            self.calibrator.load_calibration(
-                cfg.calibration.r_top,
-                cfg.calibration.r_mid,
-                cfg.calibration.r_bottom
-            )
+        reference = cfg.calibration_reference()
+        self._calibration_key = (cfg.head_pose_algorithm, reference)
+        if reference is not None:
+            self.calibrator.load_calibration(*reference)
         
         # M5: 滤波器
-        self.gaze_filter = GazeFilter(
+        self.position_filter = PositionFilter(
             ema_alpha=cfg.filter.ema_alpha,
-            confidence_min=cfg.filter.confidence_min,
             lost_face_timeout_ms=cfg.filter.lost_face_timeout_ms
         )
         
@@ -117,9 +119,7 @@ class EyeScrollController:
             th_on=cfg.thresholds.th_on,
             th_off=cfg.thresholds.th_off,
             dwell_on_ms=cfg.thresholds.dwell_on_ms,
-            dwell_off_ms=cfg.thresholds.dwell_off_ms,
-            long_blink_ms=cfg.blink.long_blink_ms,
-            blink_cooldown_ms=cfg.blink.cooldown_ms
+            dwell_off_ms=cfg.thresholds.dwell_off_ms
         )
         
         # M7: 滚动控制器
@@ -140,7 +140,17 @@ class EyeScrollController:
     
     def start(self) -> bool:
         """启动系统"""
-        self.logger.info("Starting eye scroll controller...")
+        with self._lifecycle_lock:
+            return self._start()
+
+    def _start(self) -> bool:
+        if self._running:
+            return True
+        if any(thread and thread.is_alive() for thread in self._worker_threads()):
+            self.signals.error_occurred.emit("controller", "上次运行的线程仍在退出，请稍后重试")
+            return False
+
+        self.logger.info("Starting head scroll controller...")
         
         # 初始化摄像头
         if not self.camera.start():
@@ -162,64 +172,98 @@ class EyeScrollController:
         # 重置状态
         self._stop_event.clear()
         self._pause_event.clear()
-        self.gaze_filter.reset()
-        self.scroll_controller.reset()
-        self.intent_fsm.resume()
+        self._reset_state(paused=False)
+        self.feature_extractor = FeatureExtractor()
         
         # 启动工作线程
         self._capture_thread = Thread(target=self._capture_loop, daemon=True)
         self._inference_thread = Thread(target=self._inference_loop, daemon=True)
         self._control_thread = Thread(target=self._control_loop, daemon=True)
         
+        self._running = True
         self._capture_thread.start()
         self._inference_thread.start()
         self._control_thread.start()
         
-        self.logger.info("Eye scroll controller started")
-        self._running = True
-        return True
+        self.logger.info("Head scroll controller started")
+        return self._running
     
     def stop(self):
         """停止系统"""
-        self.logger.info("Stopping eye scroll controller...")
-        
+        with self._lifecycle_lock:
+            self._stop()
+
+    def _worker_threads(self):
+        return self._capture_thread, self._inference_thread, self._control_thread
+
+    def _reset_state(self, paused: bool = True):
+        self.intent_fsm.reset(paused=paused)
+        self.position_filter.reset()
+        self.scroll_controller.reset()
+        self._last_feature_timestamp = time.perf_counter()
+        for queue in (self._frame_queue, self._feature_queue):
+            while True:
+                try:
+                    queue.get_nowait()
+                except Empty:
+                    break
+        self._frame_count = 0
+        self._current_fps = 0.0
+        self._fps_start_time = time.perf_counter()
+
+    def _stop(self):
+        self.logger.info("Stopping head scroll controller...")
         self._stop_event.set()
-        
+        self._running = False
+        with self._control_lock:
+            self._reset_state()
+            self.injector.shutdown()
+
         # 等待线程结束
-        if self._capture_thread:
-            self._capture_thread.join(timeout=1.0)
-        if self._inference_thread:
-            self._inference_thread.join(timeout=1.0)
-        if self._control_thread:
-            self._control_thread.join(timeout=1.0)
+        for thread in self._worker_threads():
+            if thread:
+                thread.join(timeout=1.0)
+        if not self._capture_thread or not self._capture_thread.is_alive():
+            self.camera.stop()
+        if any(thread and thread.is_alive() for thread in self._worker_threads()):
+            self.logger.warning("Workers are still exiting; restart is blocked until they finish")
         
-        # 清理资源
-        self.camera.stop()
-        self.injector.shutdown()
-        self.scroll_controller.stop()
-        
-        self.logger.info("Eye scroll controller stopped")
+        self.logger.info("Head scroll controller stopped")
         self._running = False
     
     def pause(self):
         """暂停"""
-        self.intent_fsm.pause()
-        self.scroll_controller.stop()
+        with self._control_lock:
+            self.intent_fsm.pause()
+            self._reset_motion()
     
     def resume(self):
         """恢复"""
-        self.intent_fsm.resume()
+        with self._control_lock:
+            if self._running:
+                self._reset_motion()
+                self.intent_fsm.resume()
     
     def toggle_pause(self):
         """切换暂停状态"""
-        self.intent_fsm.toggle_pause()
-        if self.intent_fsm.is_paused:
-            self.scroll_controller.stop()
+        with self._control_lock:
+            if not self._running:
+                return
+            self.intent_fsm.toggle_pause()
+            self._reset_motion()
     
     def _capture_loop(self):
         """T1: 摄像头采集循环"""
+        try:
+            self._capture_frames()
+        finally:
+            self.camera.stop()
+
+    def _capture_frames(self):
         while not self._stop_event.is_set():
             frame, timestamp = self.camera.get_frame()
+            if self._stop_event.is_set():
+                break
             
             if frame is not None:
                 # 只保留最新帧
@@ -250,6 +294,8 @@ class EyeScrollController:
             
             # 特征提取
             features = self.feature_extractor.extract(landmarks, timestamp)
+            if self._stop_event.is_set():
+                break
             
             # 发送到控制线程
             try:
@@ -276,72 +322,114 @@ class EyeScrollController:
     def _control_loop(self):
         """T3: 控制循环"""
         tick_interval = 1.0 / self.config.scroll.tick_hz
-        last_tick = time.perf_counter()
+        next_tick = time.perf_counter() + tick_interval
         
         while not self._stop_event.is_set():
-            # 获取最新特征
             try:
-                features: FeaturePacket = self._feature_queue.get(timeout=0.05)
+                features = self._feature_queue.get(
+                    timeout=max(0.0, next_tick - time.perf_counter())
+                )
             except Empty:
                 features = None
-            
-            current_time = time.perf_counter()
-            dt = current_time - last_tick
-            
-            if dt < tick_interval:
-                time.sleep(tick_interval - dt)
-                current_time = time.perf_counter()
-                dt = current_time - last_tick
-            
-            last_tick = current_time
-            
-            if features is None:
-                continue
-            
-            # 标定映射
-            mode = self.config.calibration.mode
-            if mode == "head":
-                if not self.calibrator.is_calibrated:
-                    s_raw = 0.5
-                else:
-                    s_raw = self.calibrator.map(features.head_pitch)
-            else:
-                s_raw = self.calibrator.map(features.gaze_y_raw)
-            
-            # 滤波
-            confidence_for_filter = features.confidence
-            if mode == "head":
-                # 头部模式不依赖眼部置信度
-                confidence_for_filter = 1.0 if features.face_present else 0.0
 
-            s_f = self.gaze_filter.update(
-                s_raw,
-                confidence_for_filter,
-                features.face_present,
-                features.timestamp
-            )
-            
-            # 状态机更新
-            state, v_target = self.intent_fsm.update(
-                s_f,
-                features.blink_state,
-                features.face_present,
-                self.gaze_filter.is_face_lost,
-                features.timestamp
-            )
-            
-            # 滚动控制
-            self.scroll_controller.set_target(v_target)
-            scroll_delta = self.scroll_controller.tick(dt)
-            
-            # 发送滚轮事件
-            if scroll_delta != 0 and state == FSMState.SCROLLING:
-                self.injector.scroll(scroll_delta)
-            
-            # 发送状态更新信号
-            state_name = state.name
-            is_scrolling = state == FSMState.SCROLLING
-            self.signals.state_updated.emit(state_name, is_scrolling, s_f, features.confidence)
+            with self._control_lock:
+                if self._stop_event.is_set():
+                    break
+                current_time = time.perf_counter()
+                if features is not None:
+                    self._expire_features(current_time)
+                    self._process_features(features, current_time)
+                if current_time >= next_tick:
+                    self._output_tick(tick_interval, current_time)
+                    # Drop missed ticks instead of integrating a delayed burst.
+                    next_tick = time.perf_counter() + tick_interval
+
+    def _reset_motion(self):
+        self.position_filter.reset()
+        self.scroll_controller.reset()
+        self.intent_fsm.reset(paused=self.intent_fsm.is_paused)
+        self._last_feature_timestamp = time.perf_counter()
+
+    def _expire_features(self, current_time: float):
+        max_age = self.config.filter.lost_face_timeout_ms / 1000.0
+        if current_time - self._last_feature_timestamp > max_age:
+            self._reset_motion()
+            self.signals.state_updated.emit(self.intent_fsm.state.name, False, 0.5, 0.0)
+
+    def _sync_calibration(self):
+        reference = self.config.calibration_reference()
+        key = (self.config.head_pose_algorithm, reference)
+        if key == self._calibration_key:
+            return
+        self.calibrator.clear()
+        if reference is not None:
+            self.calibrator.load_calibration(*reference)
+        self._calibration_key = key
+        self._reset_motion()
+
+    def _has_valid_head_pose(self, features: FeaturePacket) -> bool:
+        return (
+            features.face_present
+            and features.head_pose_valid
+            and isfinite(features.head_pitch)
+            and features.head_pose_algorithm == self.config.head_pose_algorithm
+        )
+
+    def _process_features(self, features: FeaturePacket, current_time: float):
+        self._sync_calibration()
+        max_age = self.config.filter.lost_face_timeout_ms / 1000.0
+        if (
+            not isfinite(features.timestamp)
+            or features.timestamp <= self._last_feature_timestamp
+            or not 0.0 <= current_time - features.timestamp <= max_age
+        ):
+            return
+        self._last_feature_timestamp = features.timestamp
+
+        valid_head_pose = self._has_valid_head_pose(features)
+        if not self.calibrator.is_calibrated or not valid_head_pose:
+            self._reset_motion()
+            state_name = "需要标定" if not self.calibrator.is_calibrated else "头姿无效"
+            self.signals.state_updated.emit(state_name, False, 0.5, float(valid_head_pose))
+            return
+        s_raw = self.calibrator.map(features.head_pitch)
+
+        s_f = self.position_filter.update(
+            s_raw,
+            1.0,
+            features.face_present,
+            features.timestamp
+        )
+
+        state, v_target = self.intent_fsm.update(
+            s_f,
+            features.face_present,
+            self.position_filter.is_face_lost,
+            features.timestamp
+        )
+
+        self.scroll_controller.set_target(v_target)
+        self.signals.state_updated.emit(
+            state.name, state == FSMState.SCROLLING, s_f, 1.0
+        )
+
+    def _output_tick(self, dt: float, current_time: float):
+        self._sync_calibration()
+        self._expire_features(current_time)
+        if self._stop_event.is_set() or self.intent_fsm.state != FSMState.SCROLLING:
+            self.scroll_controller.stop()
+            return
+        wheel_units = self.scroll_controller.tick(
+            dt, smooth_scroll=self.injector.use_smooth_scroll
+        )
+        if wheel_units != 0 and not self._stop_event.is_set():
+            if not self.injector.scroll(wheel_units):
+                self._stop_event.set()
+                self._running = False
+                self._reset_state()
+                message = getattr(self.injector, "last_error", None) or "滚轮注入失败"
+                self.injector.shutdown()
+                self.signals.error_occurred.emit("injector", message)
     
     @property
     def fps(self) -> float:
@@ -372,12 +460,13 @@ class Application:
         apply_theme(self.app)
         
         # 创建控制器和 UI
-        self.controller = EyeScrollController()
+        self.controller = HeadScrollController()
         self.window = MainWindow(
             always_on_top=True,
             toggle_pause_hotkey=self.controller.config.ui.hotkeys.toggle_pause,
             emergency_stop_hotkey=self.controller.config.ui.hotkeys.emergency_stop,
         )
+        self.app.aboutToQuit.connect(self.window.shutdown_hotkeys)
         self._calibration_started_controller = False
         self._calibration_prev_paused = False
         
@@ -418,16 +507,24 @@ class Application:
     
     def _on_start(self):
         """启动"""
-        if self.controller.start():
-            self.window.set_running(True)
+        started = self.controller.start()
+        self.window.set_running(self.controller.is_running)
+        self.window.set_paused(self.controller.is_paused)
+        if started:
             self.logger.info("System started")
+            if self.controller.config.calibration_reference() is None:
+                self.window.show_info("需要标定", "请先完成头部三点标定或在设置中自动校准中心")
         else:
-            self.window.show_error("启动失败", "无法启动眼动控制系统")
+            self.window.show_error("启动失败", "无法启动头姿控制系统")
     
     def _on_stop(self):
         """停止"""
         self.controller.stop()
         self.window.set_running(False)
+        self.window.set_paused(True)
+        self.window.update_fsm_state("PAUSED", False)
+        self.window.update_position(0.5)
+        self.window.update_face_status(False, 0.0)
         self.logger.info("System stopped")
     
     def _on_speed_changed(self, value: int):
@@ -443,8 +540,20 @@ class Application:
 
     def _on_settings(self):
         """打开设置对话框"""
-        dialog = SettingsDialog(self.controller.config, self.window, self.window.panel)
-        if dialog.exec():
+        was_paused = self.controller.is_paused
+        if self.controller.is_running:
+            self.controller.pause()
+        dialog = SettingsDialog(
+            self.controller.config, self.window, self.window.panel,
+            camera_running=self.controller.is_running
+        )
+        accepted = dialog.exec()
+        with self.controller._control_lock:
+            self.controller._sync_calibration()
+        if not was_paused:
+            self.controller.resume()
+        self.window.set_paused(self.controller.is_paused)
+        if accepted:
             # 应用注入设置（无需重启）
             inj_cfg = self.controller.config.injection
             if hasattr(self.controller.injector, "target_mode"):
@@ -483,6 +592,7 @@ class Application:
                 self.window.show_error("标定失败", "无法启动摄像头进行标定")
                 return
             self._calibration_started_controller = True
+            self.window.set_running(True)
 
         if not self.controller.is_paused:
             self.controller.pause()
@@ -490,8 +600,9 @@ class Application:
     def _on_calibration_complete(self, r_top: float, r_mid: float, r_bottom: float):
         """标定完成"""
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%S")
-        self.controller.calibrator.load_calibration(r_top, r_mid, r_bottom)
-        self.controller.config.update_calibration(r_top, r_mid, r_bottom, timestamp)
+        with self.controller._control_lock:
+            self.controller.config.update_calibration(r_top, r_mid, r_bottom, timestamp)
+            self.controller._sync_calibration()
         if not self.controller.config.save():
             self.logger.warning("Failed to save calibration config")
         self.window.show_info("标定完成", "标定参数已保存")
@@ -503,35 +614,44 @@ class Application:
 
     def _finish_calibration_flow(self):
         if self._calibration_started_controller:
-            self.controller.stop()
+            self._on_stop()
         elif not self._calibration_prev_paused:
             self.controller.resume()
 
     def _on_exit(self):
         """退出"""
+        self.window.shutdown_hotkeys()
         self.controller.stop()
         self.app.quit()
     
     def _on_frame_processed(self, features: FeaturePacket):
         """帧处理完成"""
-        self.window.update_face_status(features.face_present, features.confidence)
-        self.window.head_pitch_updated.emit(features.head_pitch)
-        mode = self.controller.config.calibration.mode
-        if mode == "head":
-            display_value = self._normalize_head_pitch(features.head_pitch)
-            self.window.update_calibration_gaze(display_value, features.head_pitch)
-        else:
-            self.window.update_calibration_gaze(features.gaze_y_raw)
+        if not self.controller.is_running:
+            return
+        valid_head_pose = self.controller._has_valid_head_pose(features)
+        self.window.update_face_status(features.face_present, float(valid_head_pose))
+        self.window.head_pitch_updated.emit(features.head_pitch if valid_head_pose else float("nan"))
+        if not valid_head_pose:
+            self.window.update_calibration_position(None)
+            return
+        display_value = self._normalize_head_pitch(features.head_pitch)
+        self.window.update_calibration_position(display_value, features.head_pitch)
     
     def _on_state_updated(self, state_name: str, is_scrolling: bool, s_f: float, confidence: float):
         """状态更新"""
+        if not self.controller.is_running:
+            return
         self.window.update_fsm_state(state_name, is_scrolling)
-        self.window.update_gaze(s_f)
-        self.window.set_paused(state_name == 'PAUSED')
+        self.window.update_position(s_f)
+        self.window.set_paused(self.controller.is_paused)
     
     def _on_error(self, component: str, message: str):
         """错误处理"""
         self.logger.error(f"Error in {component}: {message}")
+        if component == "injector" and not self.controller.is_running:
+            self.window.set_running(False)
+            self.window.set_paused(True)
+            self.window.update_fsm_state("PAUSED", False)
         self.window.show_error(f"{component} 错误", message)
     
     def _update_ui(self):

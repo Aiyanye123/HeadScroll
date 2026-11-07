@@ -5,9 +5,6 @@ M6: 意图状态机
 
 from enum import Enum, auto
 from typing import Optional
-import time
-
-from tracking.feature_extractor import BlinkState
 
 
 class FSMState(Enum):
@@ -26,9 +23,7 @@ class IntentFSM:
         th_on: float = 0.78,
         th_off: float = 0.70,
         dwell_on_ms: float = 400,
-        dwell_off_ms: float = 100,
-        long_blink_ms: float = 600,
-        blink_cooldown_ms: float = 1500
+        dwell_off_ms: float = 100
     ):
         """
         初始化状态机
@@ -38,29 +33,20 @@ class IntentFSM:
             th_off: 退出触发阈值
             dwell_on_ms: 进入停留时间（毫秒）
             dwell_off_ms: 退出停留时间（毫秒）
-            long_blink_ms: 长眨眼阈值（毫秒）
-            blink_cooldown_ms: 眨眼冷却时间（毫秒）
         """
         self.th_on = th_on
         self.th_off = th_off
         self.dwell_on_ms = dwell_on_ms
         self.dwell_off_ms = dwell_off_ms
-        self.long_blink_ms = long_blink_ms
-        self.blink_cooldown_ms = blink_cooldown_ms
         
         # 状态
         self._state = FSMState.PAUSED
         self._armed_start_time: Optional[float] = None
         self._off_start_time: Optional[float] = None
         
-        # 眨眼检测
-        self._blink_start_time: Optional[float] = None
-        self._last_blink_toggle_time = 0.0
-    
     def update(
         self,
         s_f: float,
-        blink_state: BlinkState,
         face_present: bool,
         face_lost: bool,
         timestamp: float
@@ -69,8 +55,7 @@ class IntentFSM:
         更新状态机
         
         Args:
-            s_f: 滤波后的注视高度
-            blink_state: 眨眼状态
+            s_f: 滤波后的头姿位置
             face_present: 是否检测到人脸
             face_lost: 人脸是否丢失（超时）
             timestamp: 时间戳
@@ -78,10 +63,6 @@ class IntentFSM:
         Returns:
             (state, v_target) 元组
         """
-        # 检测长眨眼暂停切换
-        if self._check_long_blink(blink_state, timestamp):
-            self._toggle_pause()
-        
         # 暂停状态不处理
         if self._state == FSMState.PAUSED:
             return self._state, 0.0
@@ -144,26 +125,6 @@ class IntentFSM:
         """??? 0.5 ????????? [0,1]"""
         return min(max(abs(s_f - 0.5) * 2.0, 0.0), 1.0)
 
-    def _check_long_blink(self, blink_state: BlinkState, timestamp: float) -> bool:
-        """检测长眨眼"""
-        current_time_ms = timestamp * 1000
-        
-        # 检查冷却时间
-        if current_time_ms - self._last_blink_toggle_time < self.blink_cooldown_ms:
-            return False
-        
-        if blink_state == BlinkState.CLOSED:
-            if self._blink_start_time is None:
-                self._blink_start_time = current_time_ms
-            elif current_time_ms - self._blink_start_time >= self.long_blink_ms:
-                self._last_blink_toggle_time = current_time_ms
-                self._blink_start_time = None
-                return True
-        else:
-            self._blink_start_time = None
-        
-        return False
-    
     def _toggle_pause(self) -> None:
         """切换暂停状态"""
         if self._state == FSMState.PAUSED:
@@ -185,19 +146,22 @@ class IntentFSM:
         """重置所有计时器"""
         self._armed_start_time = None
         self._off_start_time = None
-        self._blink_start_time = None
     
     def pause(self) -> None:
         """手动暂停"""
         if self._state != FSMState.PAUSED:
             self._state = FSMState.PAUSED
             self._reset_timers()
+
+    def reset(self, paused: bool = True) -> None:
+        """清除本轮滚动意图，重新开始停留计时。"""
+        self._state = FSMState.PAUSED if paused else FSMState.IDLE
+        self._reset_timers()
     
     def resume(self) -> None:
         """手动恢复"""
         if self._state == FSMState.PAUSED:
             self._state = FSMState.IDLE
-            self._last_blink_toggle_time = time.perf_counter() * 1000
     
     def toggle_pause(self) -> None:
         """切换暂停/恢复"""

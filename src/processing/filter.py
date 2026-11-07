@@ -7,8 +7,8 @@ from typing import Optional
 import time
 
 
-class GazeFilter:
-    """注视滤波器 - EMA 滤波与去抖"""
+class PositionFilter:
+    """头姿位置滤波器 - EMA 滤波与去抖"""
     
     def __init__(
         self,
@@ -29,7 +29,7 @@ class GazeFilter:
         self.lost_face_timeout_ms = lost_face_timeout_ms
         
         # 状态
-        self._s_filtered = 0.5  # 滤波后的注视高度
+        self._s_filtered = 0.5  # 滤波后的头姿位置
         self._last_valid_time: Optional[float] = None
         self._invalid_duration_ms = 0.0
         self._is_face_lost = False
@@ -45,13 +45,13 @@ class GazeFilter:
         更新滤波器
         
         Args:
-            s_raw: 原始标准化注视高度 [0,1]
+            s_raw: 原始标准化头姿位置 [0,1]
             confidence: 置信度 [0,1]
             face_present: 是否检测到人脸
             timestamp: 时间戳
             
         Returns:
-            滤波后的注视高度 s_f
+            滤波后的头姿位置 s_f
         """
         current_time = timestamp
         
@@ -91,7 +91,7 @@ class GazeFilter:
     
     @property
     def s_filtered(self) -> float:
-        """获取当前滤波后的注视高度"""
+        """获取当前滤波后的头姿位置"""
         return self._s_filtered
     
     @property

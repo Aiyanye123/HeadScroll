@@ -4,11 +4,14 @@ M2: 人脸追踪模块
 """
 
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional
 from pathlib import Path
+import sys
 import time
 import urllib.request
 import numpy as np
+import shutil
+import tempfile
 
 import cv2
 import mediapipe as mp
@@ -18,23 +21,25 @@ MODEL_URL = (
     "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 )
 
+HEAD_POSE_MATRIX_ALGORITHM = "face_matrix_pitch_v1"
+HEAD_POSE_LEGACY_ALGORITHM = "face_landmark_pitch_v1"
+HEAD_POSE_UNAVAILABLE = "unavailable"
+
 
 @dataclass
 class FaceLandmarks:
     """人脸关键点数据"""
-    # 468/478 个人脸关键点 (x, y, z)
+    # 468 个人脸关键点 (x, y, z)
     landmarks: np.ndarray  # shape: (468, 3)
     # 图像尺寸
     image_width: int
     image_height: int
+    facial_transformation_matrix: Optional[np.ndarray] = None
+    head_pose_algorithm: str = HEAD_POSE_LEGACY_ALGORITHM
     
     def get_point(self, index: int) -> np.ndarray:
         """获取指定索引的关键点坐标 (x, y, z)"""
         return self.landmarks[index]
-    
-    def get_points(self, indices: List[int]) -> np.ndarray:
-        """获取多个关键点坐标"""
-        return self.landmarks[indices]
     
     def get_pixel_coords(self, index: int) -> tuple:
         """获取关键点的像素坐标 (px, py)"""
@@ -47,33 +52,13 @@ class FaceLandmarks:
 class FaceTracker:
     """人脸追踪器- MediaPipe Face Mesh 封装"""
     
-    # 眼部关键点索引
-    # 左眼
-    LEFT_EYE_UPPER = [386, 374, 373, 390, 388, 387]
-    LEFT_EYE_LOWER = [263, 249, 390, 373, 374, 380, 381, 382, 362]
-    LEFT_IRIS = [468, 469, 470, 471, 472]  # 虹膜中心及周围
-    
-    # 右眼
-    RIGHT_EYE_UPPER = [159, 145, 144, 163, 161, 160]
-    RIGHT_EYE_LOWER = [33, 7, 163, 144, 145, 153, 154, 155, 133]
-    RIGHT_IRIS = [473, 474, 475, 476, 477]  # 虹膜中心及周围
-    
-    # 眼睑关键点（用于 EAR 计算）
-    LEFT_EYE_EAR = [362, 385, 387, 263, 373, 380]
-    RIGHT_EYE_EAR = [33, 160, 158, 133, 153, 144]
-    
     # 头部姿态参考点
     NOSE_TIP = 1
     CHIN = 152
-    LEFT_EYE_OUTER = 263
-    RIGHT_EYE_OUTER = 33
-    LEFT_MOUTH = 287
-    RIGHT_MOUTH = 57
     
     def __init__(
         self,
         max_num_faces: int = 1,
-        refine_landmarks: bool = True,
         min_detection_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
         model_path: Optional[str] = None
@@ -83,11 +68,9 @@ class FaceTracker:
         
         Args:
             max_num_faces: 最大检测人脸数
-            refine_landmarks: 是否精细化关键点（启用虹膜检测）
             min_detection_confidence: 最小检测置信度
             min_tracking_confidence: 最小追踪置信度
         """
-        self._refine_landmarks = refine_landmarks
         self._use_tasks = not hasattr(mp, "solutions")
         self._face_mesh = None
         self._face_landmarker = None
@@ -102,22 +85,27 @@ class FaceTracker:
         else:
             self._init_solutions_face_mesh(
                 max_num_faces=max_num_faces,
-                refine_landmarks=refine_landmarks,
                 min_detection_confidence=min_detection_confidence,
                 min_tracking_confidence=min_tracking_confidence,
             )
+
+    @property
+    def head_pose_algorithm(self) -> str:
+        """Return the fixed pose algorithm selected for this tracker backend."""
+        if self._use_tasks:
+            return HEAD_POSE_MATRIX_ALGORITHM
+        return HEAD_POSE_LEGACY_ALGORITHM
     
     def _init_solutions_face_mesh(
         self,
         max_num_faces: int,
-        refine_landmarks: bool,
         min_detection_confidence: float,
         min_tracking_confidence: float,
     ) -> None:
         self.mp_face_mesh = mp.solutions.face_mesh
         self._face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=max_num_faces,
-            refine_landmarks=refine_landmarks,
+            refine_landmarks=False,
             min_detection_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
         )
@@ -134,6 +122,7 @@ class FaceTracker:
 
         model_file = self._resolve_model_path(model_path)
         self._ensure_model_file(model_file)
+        model_file = self._ensure_ascii_model_path(model_file)
 
         options = vision.FaceLandmarkerOptions(
             base_options=mp_tasks.BaseOptions(model_asset_path=str(model_file)),
@@ -142,12 +131,24 @@ class FaceTracker:
             min_face_detection_confidence=min_detection_confidence,
             min_face_presence_confidence=min_tracking_confidence,
             min_tracking_confidence=min_tracking_confidence,
+            output_facial_transformation_matrixes=True,
         )
         self._face_landmarker = vision.FaceLandmarker.create_from_options(options)
 
     def _resolve_model_path(self, model_path: Optional[str]) -> Path:
         if model_path:
             return Path(model_path).expanduser()
+        if getattr(sys, "frozen", False):
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates = []
+            if hasattr(sys, "_MEIPASS"):
+                candidates.append(Path(sys._MEIPASS) / "assets" / "models" / "face_landmarker.task")
+            candidates.append(exe_dir / "assets" / "models" / "face_landmarker.task")
+            candidates.append(exe_dir / "_internal" / "assets" / "models" / "face_landmarker.task")
+            for candidate in candidates:
+                if candidate.exists():
+                    return candidate
+            return candidates[0] if candidates else exe_dir / "assets" / "models" / "face_landmarker.task"
         repo_root = Path(__file__).resolve().parents[2]
         return repo_root / "assets" / "models" / "face_landmarker.task"
 
@@ -163,6 +164,21 @@ class FaceTracker:
                 f"Please download it manually from {MODEL_URL}."
             ) from exc
 
+    def _ensure_ascii_model_path(self, model_file: Path) -> Path:
+        try:
+            str(model_file).encode("ascii")
+            return model_file
+        except UnicodeEncodeError:
+            pass
+        temp_root = Path(tempfile.gettempdir()) / "EyeScroll" / "models"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        temp_path = temp_root / model_file.name
+        if model_file.exists():
+            shutil.copy2(model_file, temp_path)
+        else:
+            self._ensure_model_file(temp_path)
+        return temp_path
+
     def process(self, frame: np.ndarray) -> Optional[FaceLandmarks]:
         """
         处理一帧图像，提取人脸关键点
@@ -176,6 +192,7 @@ class FaceTracker:
         # 转换为 RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w = frame.shape[:2]
+        facial_transformation_matrix = None
 
         if self._use_tasks:
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -185,11 +202,13 @@ class FaceTracker:
             if not results.face_landmarks:
                 return None
 
-            face_landmarks = results.face_landmarks[0]
+            if results.facial_transformation_matrixes:
+                facial_transformation_matrix = np.asarray(
+                    results.facial_transformation_matrixes[0], dtype=np.float64
+                )
+
+            face_landmarks = results.face_landmarks[0][:468]
             num_landmarks = len(face_landmarks)
-            if not self._refine_landmarks and num_landmarks >= 468:
-                face_landmarks = face_landmarks[:468]
-                num_landmarks = 468
             landmarks = np.zeros((num_landmarks, 3), dtype=np.float32)
             for i, lm in enumerate(face_landmarks):
                 landmarks[i] = [lm.x, lm.y, lm.z]
@@ -199,7 +218,7 @@ class FaceTracker:
                 return None
 
             face_landmarks = results.multi_face_landmarks[0]
-            num_landmarks = 478 if self._refine_landmarks else 468
+            num_landmarks = 468
             landmarks = np.zeros((num_landmarks, 3), dtype=np.float32)
             for i, lm in enumerate(face_landmarks.landmark):
                 if i >= num_landmarks:
@@ -209,7 +228,9 @@ class FaceTracker:
         return FaceLandmarks(
             landmarks=landmarks,
             image_width=w,
-            image_height=h
+            image_height=h,
+            facial_transformation_matrix=facial_transformation_matrix,
+            head_pose_algorithm=self.head_pose_algorithm,
         )
     
     def close(self) -> None:

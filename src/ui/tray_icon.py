@@ -18,14 +18,11 @@ def create_default_icon() -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     
-    # 绘制眼睛形状
+    # 绘制头部与肩部轮廓
     painter.setBrush(QBrush(QColor(COLORS["primary"])))
     painter.setPen(QColor(COLORS["primary_pressed"]))
-    painter.drawEllipse(4, 8, 24, 16)
-    
-    # 绘制瞳孔
-    painter.setBrush(QBrush(QColor(COLORS["background"])))
-    painter.drawEllipse(12, 12, 8, 8)
+    painter.drawEllipse(10, 3, 12, 14)
+    painter.drawEllipse(5, 19, 22, 12)
     
     painter.end()
     return QIcon(pixmap)
@@ -46,7 +43,7 @@ class TrayIcon(QSystemTrayIcon):
         super().__init__(parent)
         
         self.setIcon(create_default_icon())
-        self.setToolTip("眼动滚动控制")
+        self.setToolTip("头部滚动控制")
         
         self._is_running = False
         self._is_paused = False
