@@ -20,6 +20,7 @@ WM_MOUSEWHEEL = 0x020A
 SMTO_ABORTIFHUNG = 0x0002
 SMTO_ERRORONEXIT = 0x0020
 SEND_TIMEOUT_MS = 100
+ERROR_TIMEOUT = 1460
 
 # 某些 Python 版本的 wintypes 里没有 LRESULT
 LRESULT = getattr(wintypes, "LRESULT", wintypes.LPARAM)
@@ -106,6 +107,7 @@ class WindowsInjector(InputInjector):
         self._send_input = None
         self._initialized = False
         self._last_error: Optional[str] = None
+        self._last_scroll_timed_out = False
         self._logger = get_logger("injector")
     
     def init(self) -> bool:
@@ -182,6 +184,7 @@ class WindowsInjector(InputInjector):
         Returns:
             是否成功
         """
+        self._last_scroll_timed_out = False
         if not self._initialized or self._send_input is None:
             self._last_error = "Injector is not initialized"
             return False
@@ -303,8 +306,10 @@ class WindowsInjector(InputInjector):
             ctypes.byref(message_result),
         )
         if not sent:
+            error_code = ctypes.get_last_error()
+            self._last_scroll_timed_out = error_code == ERROR_TIMEOUT
             self._last_error = (
-                f"Wheel send failed or timed out (Win32 error {ctypes.get_last_error()})"
+                f"Wheel send failed or timed out (Win32 error {error_code})"
             )
             return False
         return True
@@ -357,7 +362,13 @@ class WindowsInjector(InputInjector):
         self._kernel32 = None
         self._send_input = None
         self._last_error = None
+        self._last_scroll_timed_out = False
     
+    @property
+    def last_scroll_timed_out(self) -> bool:
+        """上次滚轮发送是否因目标窗口响应超时而失败。"""
+        return self._last_scroll_timed_out
+
     @property
     def is_initialized(self) -> bool:
         """是否已初始化"""

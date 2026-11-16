@@ -495,6 +495,10 @@ class InteractionController:
             dt, smooth_scroll=self.injector.use_smooth_scroll
         )
         if wheel_units and not self.injector.scroll(wheel_units):
+            if self.injector.last_scroll_timed_out:
+                # Skip this output; the next tick resolves the target again.
+                self.logger.warning("Skipping wheel output: %s", self.injector.last_error)
+                return
             raise RuntimeError(self.injector.last_error or "滚动注入失败")
 
     @staticmethod

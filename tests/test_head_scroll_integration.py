@@ -185,6 +185,59 @@ class ControllerContracts(unittest.TestCase):
         self.assertFalse(controller.start())
         controller.injector.init.assert_not_called()
 
+    def test_window_timeout_skips_output_and_next_tick_uses_current_target(self):
+        controller = self.controller
+        controller._process_head_features(self.feature(100.01), 100.02)
+        controller._process_head_features(self.feature(100.2), 100.21)
+        for target in ("cursor", "foreground", "process"):
+            with self.subTest(target=target):
+                injector = WindowsInjector(target_mode=target, target_process="reader.exe")
+                injector._initialized = True
+                injector._user32 = Mock()
+                injector._send_input = Mock(return_value=1)
+                injector._user32.WindowFromPoint.side_effect = [11, 22]
+                injector._user32.GetForegroundWindow.side_effect = [11, 22]
+                injector._user32.SendMessageTimeoutW.side_effect = [0, 1]
+                controller.injector = injector
+                with patch.object(injector, "_find_window_by_process_name", side_effect=[11, 22]), \
+                     patch("injection.windows.ctypes.get_last_error", return_value=1460), \
+                     patch.object(controller.scroll_controller, "tick", side_effect=[12, 9]), \
+                     self.assertLogs(controller.logger, level="WARNING"):
+                    controller._head_output_tick(1 / 90, 100.22)
+                    self.assertTrue(injector.last_scroll_timed_out)
+                    controller._head_output_tick(1 / 90, 100.24)
+                self.assertFalse(injector.last_scroll_timed_out)
+                self.assertIsNone(injector.last_error)
+                calls = injector._user32.SendMessageTimeoutW.call_args_list
+                self.assertEqual([call.args[0] for call in calls], [11, 22])
+                self.assertEqual(
+                    [call.args[2] >> 16 for call in calls],
+                    [(-12) & 0xFFFF, (-9) & 0xFFFF],
+                )
+                injector._send_input.assert_not_called()
+                self.assertTrue(controller._running)
+                self.assertFalse(controller._stop_event.is_set())
+
+    def test_other_wheel_failures_remain_fatal_after_timeout(self):
+        controller = self.controller
+        controller._process_head_features(self.feature(100.01), 100.02)
+        controller._process_head_features(self.feature(100.2), 100.21)
+        injector = WindowsInjector(target_mode="foreground")
+        injector._initialized = True
+        injector._user32 = Mock()
+        injector._user32.SendMessageTimeoutW.return_value = 0
+        injector._send_input = Mock(return_value=1)
+        controller.injector = injector
+        with patch.object(controller.scroll_controller, "tick", return_value=12), \
+             patch("injection.windows.ctypes.get_last_error", side_effect=[1460, 5, 0]):
+            with self.assertLogs(controller.logger, level="WARNING"):
+                controller._head_output_tick(1 / 90, 100.22)
+            for error_code in (5, 0):
+                with self.subTest(error_code=error_code):
+                    with self.assertRaisesRegex(RuntimeError, f"Win32 error {error_code}"):
+                        controller._head_output_tick(1 / 90, 100.24)
+                    self.assertFalse(injector.last_scroll_timed_out)
+
 
 class WheelInjectionContracts(unittest.TestCase):
     def injector(self, target="cursor"):
